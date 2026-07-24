@@ -5,5 +5,9 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "bs4>=0.0.2",
+    "ebooklib>=0.20",
+    "loguru>=0.7.3",
     "numpy>=2.5.0",
+    "requests>=2.34.2",
 ]
