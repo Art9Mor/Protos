@@ -36,7 +36,6 @@ models/
 *.tflite
 
 # Данные (большие файлы)
-data/
 # Исключаем .gitkeep
 !data/.gitkeep
 !data/books/.gitkeep
