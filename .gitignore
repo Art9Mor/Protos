@@ -1,11 +1,73 @@
-# Python-generated files
+# .gitignore
+
+# Python
 __pycache__/
 *.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+ENV/
+env/
 
-# Virtual environments
-.venv
-.idea
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Логи
+logs/
+*.log
+*.log.zip
+*.log.gz
+*.log.*
+
+# Модели (большие файлы)
+models/
+*.pkl
+*.h5
+*.pt
+*.pth
+*.onnx
+*.pb
+*.tflite
+
+# Данные (большие файлы)
+data/
+# Исключаем .gitkeep
+!data/.gitkeep
+!data/books/.gitkeep
+data/books/*
+!data/books/.gitkeep
+
+# Книги (защищены авторским правом)
+*.epub
+*.fb2
+*.pdf
+*.doc
+*.docx
+*.txt
+
+# Конфиги с секретами
+.env
+.env.local
+.env.*.local
+config/local.json
+config/*.local.json
+
+# Jupyter
+*.ipynb
+.ipynb_checkpoints/
+
+# Тесты
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Системные
+.DS_Store
+Thumbs.db
+desktop.ini

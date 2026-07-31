@@ -1,17 +1,16 @@
-# app/core/lstm.py
-
 import numpy as np
 
 
 class LSTMCell:
     """
-    Ячейка LSTM.
+    Ячейка LSTM с поддержкой накопления градиентов для BPTT.
     """
 
     def __init__(self, input_size: int, hidden_size: int):
         self.input_size = input_size
         self.hidden_size = hidden_size
 
+        # Веса
         self.W_i = np.random.randn(hidden_size, input_size + hidden_size) * 0.01
         self.b_i = np.zeros(hidden_size)
 
@@ -24,6 +23,7 @@ class LSTMCell:
         self.W_c = np.random.randn(hidden_size, input_size + hidden_size) * 0.01
         self.b_c = np.zeros(hidden_size)
 
+        # Градиенты
         self.grad_W_i = np.zeros_like(self.W_i)
         self.grad_W_f = np.zeros_like(self.W_f)
         self.grad_W_o = np.zeros_like(self.W_o)
@@ -35,24 +35,26 @@ class LSTMCell:
 
         self.cache = None
 
+    def zero_grad(self):
+        """Обнуление градиентов перед новой последовательностью."""
+        self.grad_W_i.fill(0.0)
+        self.grad_W_f.fill(0.0)
+        self.grad_W_o.fill(0.0)
+        self.grad_W_c.fill(0.0)
+        self.grad_b_i.fill(0.0)
+        self.grad_b_f.fill(0.0)
+        self.grad_b_o.fill(0.0)
+        self.grad_b_c.fill(0.0)
+
     @staticmethod
     def sigmoid(x):
-        """
-        Сигмоидная функция.
-        """
         return 1 / (1 + np.exp(-np.clip(x, -500, 500)))
 
     @staticmethod
     def tanh(x):
-        """
-        Гиперболический тангенс.
-        """
         return np.tanh(x)
 
     def forward(self, x: np.ndarray, h_prev: np.ndarray, c_prev: np.ndarray):
-        """
-        Прямой проход.
-        """
         if x.ndim == 1:
             x = x.reshape(-1)
         if h_prev.ndim == 1:
@@ -73,9 +75,6 @@ class LSTMCell:
         return h, c
 
     def backward(self, grad_h: np.ndarray, grad_c: np.ndarray):
-        """
-        Обратный проход.
-        """
         if self.cache is None:
             raise ValueError("Нет кэша. Сначала выполните forward().")
 
@@ -90,15 +89,16 @@ class LSTMCell:
 
         combined = np.concatenate([x, h_prev])
 
-        self.grad_W_i = np.outer(grad_i, combined)
-        self.grad_W_f = np.outer(grad_f, combined)
-        self.grad_W_o = np.outer(grad_o, combined)
-        self.grad_W_c = np.outer(grad_c_tilde, combined)
+        # ВАЖНО: накапливаем градиенты (+=), а не перезаписываем
+        self.grad_W_i += np.outer(grad_i, combined)
+        self.grad_W_f += np.outer(grad_f, combined)
+        self.grad_W_o += np.outer(grad_o, combined)
+        self.grad_W_c += np.outer(grad_c_tilde, combined)
 
-        self.grad_b_i = grad_i
-        self.grad_b_f = grad_f
-        self.grad_b_o = grad_o
-        self.grad_b_c = grad_c_tilde
+        self.grad_b_i += grad_i
+        self.grad_b_f += grad_f
+        self.grad_b_o += grad_o
+        self.grad_b_c += grad_c_tilde
 
         grad_combined = (
             np.dot(self.W_i.T, grad_i) +
@@ -113,9 +113,6 @@ class LSTMCell:
         return grad_x, grad_h_prev, grad_c
 
     def update(self, learning_rate: float = 0.01):
-        """
-        Обновление весов.
-        """
         self.W_i -= learning_rate * self.grad_W_i
         self.b_i -= learning_rate * self.grad_b_i
         self.W_f -= learning_rate * self.grad_W_f

@@ -23,6 +23,7 @@ class BookDownloader:
         """
         Загрузка локальных книг из папки data/books/.
         """
+
         books = []
         for filepath in self.books_dir.iterdir():
             if filepath.is_file():
@@ -37,7 +38,10 @@ class BookDownloader:
 
     @staticmethod
     def _read_txt(filepath: Path) -> str:
-        """Чтение .txt файла."""
+        """
+        Чтение .txt файла.
+        """
+
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 return f.read()
@@ -50,7 +54,10 @@ class BookDownloader:
 
     @staticmethod
     def _read_epub(filepath: Path) -> str:
-        """Чтение .epub файла."""
+        """
+        Чтение .epub файла.
+        """
+
         try:
             import ebooklib
             from ebooklib import epub
@@ -74,7 +81,10 @@ class BookDownloader:
 
     @staticmethod
     def _read_fb2(filepath: Path) -> str:
-        """Чтение .fb2 файла."""
+        """
+        Чтение .fb2 файла.
+        """
+
         try:
             from xml.etree import ElementTree
 
@@ -93,7 +103,10 @@ class BookDownloader:
 
     @staticmethod
     def _read_doc(filepath: Path) -> str:
-        """Чтение .doc файла (устаревший формат)."""
+        """
+        Чтение .doc файла (устаревший формат).
+        """
+
         try:
             import textract
             return textract.process(filepath).decode('utf-8')
@@ -106,7 +119,10 @@ class BookDownloader:
 
     @staticmethod
     def _read_docx(filepath: Path) -> str:
-        """Чтение .docx файла."""
+        """
+        Чтение .docx файла.
+        """
+
         try:
             import docx
             doc = docx.Document(filepath)
@@ -123,11 +139,14 @@ class BookDownloader:
 
     @staticmethod
     def _read_pdf(filepath: Path) -> str:
-        """Чтение .pdf файла."""
+        """
+        Чтение .pdf файла.
+        """
+
         try:
             import PyPDF2
             text = []
-            with open(filepath, 'rb') as f:
+            with open(filepath, 'rb', encoding='utf-8') as f:
                 reader = PyPDF2.PdfReader(f)
                 for page in reader.pages:
                     page_text = page.extract_text()
@@ -143,7 +162,10 @@ class BookDownloader:
 
     @staticmethod
     def _read_zip(filepath: Path) -> str:
-        """Чтение .zip архива с книгами."""
+        """
+        Чтение .zip архива с книгами.
+        """
+
         try:
             text = []
             with zipfile.ZipFile(filepath, 'r') as zip_ref:
@@ -161,7 +183,10 @@ class BookDownloader:
 
     @staticmethod
     def _read_rar(filepath: Path) -> str:
-        """Чтение .rar архива с книгами."""
+        """
+        Чтение .rar архива с книгами.
+        """
+
         try:
             import rarfile
             text = []
@@ -183,7 +208,10 @@ class BookDownloader:
 
     @staticmethod
     def _read_json(filepath: Path) -> str:
-        """Чтение .json файла с текстом."""
+        """
+        Чтение .json файла с текстом.
+        """
+
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -203,7 +231,10 @@ class BookDownloader:
 
     @staticmethod
     def _read_md(filepath: Path) -> str:
-        """Чтение .md (Markdown) файла."""
+        """
+        Чтение .md (Markdown) файла.
+        """
+
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 text = f.read()
@@ -233,7 +264,10 @@ class BookDownloader:
 
     @staticmethod
     def _read_html(filepath: Path) -> str:
-        """Чтение .html/.htm файла."""
+        """
+        Чтение .html/.htm файла.
+        """
+
         try:
             from bs4 import BeautifulSoup
             with open(filepath, 'r', encoding='utf-8') as f:
@@ -250,6 +284,7 @@ class BookDownloader:
         """
         Чтение книги в зависимости от расширения.
         """
+
         ext = Path(filepath).suffix.lower()
 
         readers = {
@@ -276,6 +311,7 @@ class BookDownloader:
         """
         Скачивание русских книг из открытых источников.
         """
+
         if requests is None:
             print("⚠️ Для скачивания нужен модуль requests: pip install requests")
             return []
@@ -313,6 +349,7 @@ class BookDownloader:
         """
         Скачивание английских книг из открытых источников.
         """
+
         if requests is None:
             print("⚠️ Для скачивания нужен модуль requests: pip install requests")
             return []
@@ -351,6 +388,7 @@ def train_protos_on_books(assistant):
     """
     Обучение Протоса на книгах с поддержкой разных форматов.
     """
+
     print("=" * 60)
     print("📚 ОБУЧЕНИЕ ПРОТОСА НА КНИГАХ")
     print("=" * 60)
@@ -413,6 +451,7 @@ def continue_training_from_saved(assistant):
     """
     Продолжение обучения из сохраненной модели.
     """
+
     print("=" * 60)
     print("📚 ПРОДОЛЖЕНИЕ ОБУЧЕНИЯ")
     print("=" * 60)
@@ -439,9 +478,9 @@ def continue_training_from_saved(assistant):
                 print(f"  ❌ Не удалось прочитать файл")
                 continue
 
-            if len(text) > 50000:
-                text = text[:50000]
-                print(f"  ⚠️ Текст сокращен до 50000 символов")
+            if len(text) > 200000:
+                text = text[:200000]
+                print(f"  ⚠️ Текст сокращен до 200000 символов")
 
             assistant.learning_manager.learn_from_text(text, source=f"book:{os.path.basename(book_path)}")
             print(f"  ✅ Добавлена книга ({len(text)} символов)")
@@ -450,7 +489,7 @@ def continue_training_from_saved(assistant):
             print(f"  ❌ Ошибка обработки книги: {e}")
 
     print("\n🧠 Запуск обучения...")
-    assistant.learning_manager.train(epochs=5, sequence_length=100)
+    assistant.learning_manager.train(epochs=15, sequence_length=60)
     assistant.learning_manager.save_model('models/protos_lstm.json')
 
     print("\n✅ Обучение завершено!")

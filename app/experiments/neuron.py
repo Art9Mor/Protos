@@ -6,14 +6,17 @@ class Neuron:
         self.bias = np.random.randn(1)
         self.activation = activation
 
-    def sigmoid(self, z):
+    @staticmethod
+    def sigmoid(z):
         return 1 / (1 + np.exp(-z))
 
-    def relu(self, z):
+    @staticmethod
+    def relu(z):
         return np.maximum(0, z)
 
     def forward(self, inputs):
         z = np.dot(self.weights, inputs) + self.bias
+        output = z
 
         match self.activation:
             case 'sigmoid':

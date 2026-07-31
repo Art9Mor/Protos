@@ -1,7 +1,7 @@
 import numpy as np
 
-from app.core.layer import Layer
-from app.core.network import NeuralNetwork
+from app.experiments.layer import Layer
+from app.experiments.network import NeuralNetwork
 
 # Подготовка тестовых данных
 training_data = [
