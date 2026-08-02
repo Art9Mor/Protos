@@ -1,0 +1,17 @@
+{
+  "statuses": {
+    "Артём": "creator"
+  },
+  "creator_name": "Артём",
+  "owner_name": null,
+  "known_users": {
+    "Артём": {
+      "status": "creator",
+      "relations": {}
+    },
+    "Попросил": {
+      "status": "user",
+      "relations": {}
+    }
+  }
+}

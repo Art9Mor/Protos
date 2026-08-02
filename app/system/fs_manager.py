@@ -5,7 +5,9 @@ from typing import Optional
 
 
 class FileSystemManager:
-    """Управление файловой системой (кроссплатформенный)."""
+    """
+    Управление файловой системой (кроссплатформенный).
+    """
 
     def __init__(self):
         self.current_path = Path(os.getcwd())
@@ -15,7 +17,10 @@ class FileSystemManager:
         self.forbidden_paths = ['/etc', '/boot', '/sys', 'C:\\Windows', 'C:\\Program Files']
 
     def list_dir(self, path: Optional[str] = None) -> str:
-        """Список файлов и папок в директории."""
+        """
+        Список файлов и папок в директории.
+        """
+
         target = Path(path) if path else self.current_path
 
         try:
@@ -36,7 +41,10 @@ class FileSystemManager:
             return f"Ошибка: {e}"
 
     def change_dir(self, path: Optional[str] = None) -> str:
-        """Смена текущей директории."""
+        """
+        Смена текущей директории.
+        """
+
         if not path:
             self.current_path = Path.home()
             return f"Перешел в {self.current_path}"
@@ -54,7 +62,10 @@ class FileSystemManager:
             return f"Папка не найдена: {path}"
 
     def read_file(self, filename: str) -> str:
-        """Чтение содержимого файла."""
+        """
+        Чтение содержимого файла.
+        """
+
         filepath = self.current_path / filename
 
         try:
@@ -68,7 +79,10 @@ class FileSystemManager:
             return f"Ошибка чтения файла: {e}"
 
     def write_file(self, filename: str, content: str) -> str:
-        """Создание или перезапись файла."""
+        """
+        Создание или перезапись файла.
+        """
+
         filepath = self.current_path / filename
 
         if not self._is_allowed_extension(filename):
@@ -82,7 +96,10 @@ class FileSystemManager:
             return f"Ошибка записи файла: {e}"
 
     def get_info(self) -> dict[str, str]:
-        """Информация о системе."""
+        """
+        Информация о системе.
+        """
+
         return {
             'current_dir': str(self.current_path),
             'os_type': self.os_type,
@@ -93,7 +110,10 @@ class FileSystemManager:
 
     @staticmethod
     def _format_size(size: int) -> str:
-        """Форматирование размера файла."""
+        """
+        Форматирование размера файла.
+        """
+
         for unit in ['B', 'KB', 'MB', 'GB']:
             if size < 1024:
                 return f"{size:.1f}{unit}"
@@ -102,7 +122,10 @@ class FileSystemManager:
 
     @staticmethod
     def _is_allowed(path: Path) -> bool:
-        """Проверка безопасности пути."""
+        """
+        Проверка безопасности пути.
+        """
+
         path_str = str(path)
         forbidden_paths = ['/etc', '/boot', '/sys', 'C:\\Windows', 'C:\\Program Files']
 
@@ -113,7 +136,10 @@ class FileSystemManager:
 
     @staticmethod
     def _is_allowed_extension(filename: str) -> bool:
-        """Проверка разрешенного расширения."""
+        """
+        Проверка разрешенного расширения.
+        """
+
         ext = Path(filename).suffix
         allowed = ['.py', '.txt', '.json', '.md', '.csv', '.yaml']
         return ext in allowed

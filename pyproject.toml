@@ -9,5 +9,8 @@ dependencies = [
     "ebooklib>=0.20",
     "loguru>=0.7.3",
     "numpy>=2.5.0",
+    "python-dotenv>=1.2.2",
+    "pyttsx3>=2.99",
     "requests>=2.34.2",
+    "speechrecognition>=3.17.0",
 ]

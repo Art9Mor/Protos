@@ -3,7 +3,7 @@ from typing import List
 
 import numpy as np
 
-from app.core.layer import Layer
+from app.experiments.layer import Layer
 
 
 class NeuralNetwork:
@@ -75,7 +75,7 @@ class NeuralNetwork:
             })
 
         # Сохраняем в JSON
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(model_data, f, indent=2)
 
         print(f"✅ Модель сохранена в {filepath}")
@@ -87,7 +87,7 @@ class NeuralNetwork:
         """
 
         try:
-            with open(filepath, 'r') as f:
+            with open(filepath, 'r', encoding='utf-8') as f:
                 model_data = json.load(f)
         except FileNotFoundError:
             raise FileNotFoundError(f"Файл {filepath} не найден")
