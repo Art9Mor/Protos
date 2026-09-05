@@ -1,95 +1,183 @@
-# app/memory/context.py
-
 import time
 from collections import deque
 
 import numpy as np
 
+from .models import MemoryEvent, MemoryEventType
+
 
 class ContextMemory:
     """
-    Управление контекстом диалога с приоритезацией.
+    Управление кратковременной памятью Протоса.
     """
 
-    def __init__(self, max_size: int = 50, embedding_dim: int = 10):
+    def __init__(self, max_size: int = 50):
         self.max_size = max_size
-        self.embedding_dim = embedding_dim
-        self.messages = deque(maxlen=max_size)
-        self.importance_scores = deque(maxlen=max_size)
-        self.timestamps = deque(maxlen=max_size)
-        self.embeddings = deque(maxlen=max_size)
+        self.events: deque[MemoryEvent] = deque(maxlen=max_size)
 
-    def add_mes(self, message: str, embedding: np.ndarray | None = None, importance: float = 0.1) -> None:
+    def record(self, event: MemoryEvent) -> None:
         """
-        Добавление сообщения в память.
+        Записать событие в память.
         """
-        self.messages.append(message)
+        self.events.append(event)
 
-        # Если эмбеддинг не передан, создаем случайный
-        if embedding is None:
-            embedding = np.random.randn(self.embedding_dim) * 0.01
-        self.embeddings.append(embedding)
-
-        self.importance_scores.append(importance)
-        self.timestamps.append(time.time())
-
-    def get_context(self, limit: int = 10) -> list[str]:
+    def remember_message(
+            self,
+            text: str,
+            importance: float = 0.1,
+            embedding: np.ndarray | None = None,
+    ) -> None:
         """
-        Получение наиболее важного контекста.
+        Сохранить сообщение в память.
         """
-        if len(self.messages) <= limit:
-            return list(self.messages)
 
-        combined = list(zip(self.messages, self.importance_scores, self.timestamps))
-        current_time = time.time()
-        combined.sort(
-            key=lambda x: x[1] * (1 + 0.1 * (current_time - x[2])),
-            reverse=True
+        self.record(
+            MemoryEvent(
+                event_type=MemoryEventType.MESSAGE,
+                content=text,
+                importance=importance,
+                embedding=embedding,
+            )
         )
-        return [msg for msg, _, _ in combined[:limit]]
 
-    def get_context_with_embeddings(self, limit: int = 10) -> list[tuple[str, np.ndarray]]:
+    def remember_thought(
+            self,
+            text: str,
+            importance: float = 0.3,
+            embedding: np.ndarray | None = None,
+    ) -> None:
         """
-        Получение контекста с эмбеддингами.
+        Сохранить мысль в память.
         """
-        if len(self.messages) <= limit:
-            return list(zip(self.messages, self.embeddings))
 
-        combined = list(zip(self.messages, self.embeddings, self.importance_scores, self.timestamps))
-        current_time = time.time()
-        combined.sort(
-            key=lambda x: x[2] * (1 + 0.1 * (current_time - x[3])),
-            reverse=True
+        self.record(
+            MemoryEvent(
+                event_type=MemoryEventType.THOUGHT,
+                content=text,
+                importance=importance,
+                embedding=embedding,
+            )
         )
-        return [(msg, emb) for msg, emb, _, _ in combined[:limit]]
+
+    def remember_action(
+            self,
+            text: str,
+            importance: float = 0.2,
+    ) -> None:
+        """
+        Сохранить действие Протоса.
+        """
+
+        self.record(
+            MemoryEvent(
+                event_type=MemoryEventType.ACTION,
+                content=text,
+                importance=importance,
+            )
+        )
+
+    def remember_learning(
+            self,
+            text: str,
+            importance: float = 0.4,
+    ) -> None:
+        """
+        Сохранить результат обучения.
+        """
+
+        self.record(
+            MemoryEvent(
+                event_type=MemoryEventType.LEARNING,
+                content=text,
+                importance=importance,
+            )
+        )
+
+    @staticmethod
+    def _score(event: MemoryEvent) -> float:
+        """
+        Рассчитать приоритет события.
+
+        Пока учитываются только:
+        - важность
+        - давность
+        """
+
+        age = time.time() - event.timestamp
+
+        # Через час значимость уменьшается примерно вдвое.
+        freshness = 1 / (1 + age / 3600)
+
+        return event.importance * freshness
+
+    def get_context(self, limit: int = 10) -> list[MemoryEvent]:
+        """
+        Получить наиболее значимые события.
+        """
+
+        if len(self.events) <= limit:
+            return list(self.events)
+
+        ranked = sorted(
+            self.events,
+            key=self._score,
+            reverse=True,
+        )
+
+        return ranked[:limit]
+
+    def get_context_with_embeddings(
+        self,
+        limit: int = 10,
+    ) -> list[tuple[MemoryEvent, np.ndarray]]:
+        """
+        Получить события вместе с embedding.
+        """
+
+        return [
+            (event, event.embedding)
+            for event in self.get_context(limit)
+            if event.embedding is not None
+        ]
 
     def summarize(self) -> str:
         """
-        Создание краткой сводки памяти.
+        Краткая сводка памяти.
         """
-        if not self.messages:
-            return "Диалог еще не начат"
 
-        avg_importance = sum(self.importance_scores) / len(self.importance_scores)
-        return f"Память содержит {len(self.messages)} сообщений. Средняя важность: {avg_importance:.2f}. Последнее: {self.messages[-1][:50]}..."
+        if not self.events:
+            return "Память пока пуста."
 
-    def get_recent(self, n: int = 5) -> list[str]:
+        avg_importance = (
+            sum(event.importance for event in self.events)
+            / len(self.events)
+        )
+
+        last = self.events[-1]
+
+        return (
+            f"Память содержит {len(self.events)} событий. "
+            f"Средняя важность: {avg_importance:.2f}. "
+            f"Последнее событие: {last.content[:50]}..."
+        )
+
+    def get_recent(self, n: int = 5) -> list[MemoryEvent]:
         """
-        Получение последних N сообщений.
+        Получить последние события.
         """
-        return list(self.messages)[-n:]
+
+        return list(self.events)[-n:]
 
     def clear(self) -> None:
         """
-        Очистка памяти.
+        Очистить память.
         """
-        self.messages.clear()
-        self.embeddings.clear()
-        self.importance_scores.clear()
-        self.timestamps.clear()
+
+        self.events.clear()
 
     def __len__(self) -> int:
         """
-        Количество сообщений в памяти.
+        Количество событий.
         """
-        return len(self.messages)
+
+        return len(self.events)

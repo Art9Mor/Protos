@@ -55,7 +55,7 @@ def read_user_line(prompt: str = '\n👤 Вы: ') -> tuple[str, bool]:
         sys.stdout.write(prompt)
         sys.stdout.flush()
         raw = sys.stdin.buffer.readline()
-        debug_logger.debug(f'Битые байты при вводе: {raw!r}')
+        debug_logger.debug(f'Битые байты при вводе: {e}/{raw!r}')
         text = raw.decode('utf-8', errors='replace').rstrip('\r\n').strip()
         return text, True
 
@@ -97,7 +97,6 @@ def main():
 
                 if user_input.lower() in ['exit', 'quit', 'выход', 'стоп']:
                     debug_logger.debug('Получена команда выхода')
-                    print('👋 До свидания!')
                     main_logger.info('Завершение работы Протоса')
                     break
 
@@ -143,7 +142,6 @@ def main():
 
             except KeyboardInterrupt:
                 debug_logger.debug('Прерывание по Ctrl+C')
-                print('\n👋 До свидания!')
                 main_logger.info('Завершение работы по Ctrl+C')
                 break
             except Exception as e:

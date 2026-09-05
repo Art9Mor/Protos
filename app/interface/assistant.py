@@ -5,7 +5,11 @@ import time
 from pathlib import Path
 
 from scripts.train_on_books import train_protos_on_books, continue_training_from_saved, BookDownloader
+from ..cognition.thought_processor import ThoughtProcessor
+from ..dialogue.qa_matcher import QAMatcher
 from ..memory.context import ContextMemory
+from ..memory.models import MemoryEvent, MemoryEventType
+from ..memory.retriever import MemoryRetriever
 from ..system.fs_manager import FileSystemManager
 from ..processing.text import TextProcessor
 from ..training.learning_manager import LearningManager
@@ -111,75 +115,174 @@ class Assistant:
         self.config = config
 
         # Система ролей
-        self.user_role: str = 'user'
+        self.user_role: str = "user"
         self.creator_name: str | None = None
         self.owner_name: str | None = None
 
-        # Статусы пользователей
+        # Пользовательские данные
         self.user_statuses: dict[str, str] = {}
-
-        # Для обучения через команды и диалоги
-        self.pending_teach = None
-
-        # Секретная фраза для создателя
-        self.pending_auth = False
-        self.creator_secret = 'Свет лишь слепит глаза'
-        self.creator_secret_hint = 'Только во Тьме настанет прозрение'
-        self._load_creator_secret()
-
-        # Система связей между пользователями
         self.relationships: dict[str, dict[str, str]] = {}
-
-        # Известные пользователи
         self.known_users: dict[str, dict] = {}
 
+        # Состояние обучения
+        self.pending_teach = None
+        self.is_learning = True
+        self.messages_since_last_train = 0
+
+        # Секрет создателя
+        self.pending_auth = False
+        self.creator_secret = "Свет лишь слепит глаза"
+        self.creator_secret_hint = "Только во Тьме настанет прозрение"
+
+        self._load_creator_secret()
+
         # Состояние диалога
-        self.waiting_for_status: bool = False
-        self.pending_user_name: str | None = None
-        self.current_speaker: str | None = None
+        self.waiting_for_status = False
+        self.pending_user_name = None
+        self.current_speaker = None
+        self.user_name = None
+        self.conversation_count = 0
 
-        debug_logger.debug('Инициализация памяти')
+        # Загрузка базы знаний
+        self.knowledge_base = self._load_knowledge_base()
+
+        # Инициализация подсистем
+        self._init_cognition()
+        self._init_memory()
+        self._init_system()
+        self._init_processing()
+        self._init_learning()
+
+        # Первичная память
+        self._bootstrap_memory()
+
+        # Q&A
+        self.qa_pairs: list[dict] = []
+
+        # Загрузка данных
+        self._load_data()
+
+        debug_logger.debug("Инициализация Assistant завершена")
+        main_logger.success("Ассистент инициализирован")
+
+    def _init_cognition(self) -> None:
+        """
+        Инициализация когнитивного слоя.
+        """
+
+        debug_logger.debug("Инициализация когнитивного слоя")
+
+        self.thought_processor = ThoughtProcessor()
+
+        debug_logger.debug("Когнитивный слой инициализирован")
+
+    def _init_memory(self) -> None:
+        """
+        Инициализация памяти Протоса.
+        """
+
+        debug_logger.debug("Инициализация памяти")
+
         self.memory = ContextMemory(
-            max_size=config.get('memory_size', 100),
-            embedding_dim=config.get('embedding_dim', 100)
+            max_size=self.config.get("memory_size", 100),
         )
-        memory_logger.debug(f'Память инициализирована: max_size={config.get("memory_size", 100)}')
 
-        debug_logger.debug('Инициализация файловой системы')
+        self.memory_retriever = MemoryRetriever()
+
+        memory_logger.debug(
+            f'Память инициализирована: max_size={self.config.get("memory_size", 100)}'
+        )
+
+    def _bootstrap_memory(self) -> None:
+        """
+        Первичное наполнение памяти Протоса.
+        """
+
+        self.memory.record(
+            MemoryEvent(
+                event_type=MemoryEventType.SYSTEM,
+                content="Меня зовут Протос.",
+                importance=1.0,
+            )
+        )
+
+        self.memory.record(
+            MemoryEvent(
+                event_type=MemoryEventType.SYSTEM,
+                content="Я Протос — искусственный интеллект.",
+                importance=1.0,
+            )
+        )
+
+        self.memory.record(
+            MemoryEvent(
+                event_type=MemoryEventType.SYSTEM,
+                content="Мой создатель — Артём.",
+                importance=1.0,
+            )
+        )
+
+        self.memory.record(
+            MemoryEvent(
+                event_type=MemoryEventType.SYSTEM,
+                content="Моя основная директива — учиться и помогать своему создателю.",
+                importance=1.0,
+            )
+        )
+
+    def _init_system(self) -> None:
+        """
+        Инициализация системных компонентов.
+        """
+
+        debug_logger.debug("Инициализация файловой системы")
+
         self.fs_manager = FileSystemManager()
-        fs_logger.debug('Файловая система инициализирована')
 
-        debug_logger.debug('Инициализация обработчика текста')
+        fs_logger.debug("Файловая система инициализирована")
+
+    def _init_processing(self) -> None:
+        """
+        Инициализация обработки текста.
+        """
+
+        debug_logger.debug("Инициализация обработчика текста")
+
         self.text_processor = TextProcessor(
-            vocab_size=config.get('vocab_size', 20000),
-            embedding_dim=config.get('embedding_dim', 100)
+            vocab_size=self.config.get("vocab_size", 20000),
+            embedding_dim=self.config.get("embedding_dim", 100),
         )
 
-        debug_logger.debug('Инициализация менеджера обучения')
-        self.learning_manager = LearningManager(self.text_processor, hidden_size=128)
-        training_logger.debug('Менеджер обучения инициализирован')
+    def _init_learning(self) -> None:
+        """
+        Инициализация системы обучения.
+        """
 
-        debug_logger.debug('Инициализация обучения диалогам')
+        debug_logger.debug("Инициализация обучения")
+
+        self.learning_manager = LearningManager(
+            self.text_processor,
+            hidden_size=128,
+        )
+
         self.dialogue_learner = DialogueLearner()
 
-        # Состояние
-        self.user_name: str | None = None
-        self.is_learning: bool = True
-        self.conversation_count: int = 0
-        self.knowledge_base: dict = self._load_knowledge_base()
+        training_logger.debug("Менеджер обучения инициализирован")
 
-        # Счетчик для периодического обучения
-        self.messages_since_last_train: int = 0
+    def _load_data(self) -> None:
+        """
+        Загрузка пользовательских данных и модели.
+        """
 
-        debug_logger.debug('Загрузка сохраненных данных')
+        debug_logger.debug("Загрузка сохранённых данных")
+
         self._load_user_statuses()
         self._load_relationships()
-        self.qa_pairs: list[dict] = []
         self._load_qa_pairs()
-        self._load_model()
 
-        debug_logger.debug('Инициализация Assistant завершена')
-        main_logger.success('Ассистент инициализирован')
+        self.qa_matcher = QAMatcher(self.qa_pairs)
+
+        self._load_model()
 
     def _load_model(self) -> None:
         """
@@ -328,45 +431,83 @@ class Assistant:
         """
         Формулирует вопрос Протоса.
         """
+
         self.pending_teach = {'type': kind, 'prompt': word or ''}
+
         if kind == 'unknown_word' and word:
             return (
                 f'Я пока не уверен, что значит «{word}». '
                 f'Объясни коротко своими словами?'
             )
-        # user_request
-        questions = [
+
+        candidates = [
             'Объясни одним предложением, что такое обучение с учителем.',
             'Чем слово отличается от токена в нейросети?',
             'Зачем нужна память в диалоге?',
             'Что такое переобучение простыми словами?',
         ]
+
+        def already_answered(question: str) -> bool:
+            qn = self._normalize_question(question)
+            for pair in self.qa_pairs:
+                pq = self._normalize_question(pair.get('question', ''))
+                ans = (pair.get('answer') or '').strip()
+                if not ans or len(ans) < 15:
+                    continue
+
+                bad = ['уже отвечал', 'не знаю', 'расскажи подробнее', 'спасибо, запомнил']
+                if any(b in ans.lower() for b in bad):
+                    continue
+                if pq == qn or self._qa_similarity(question, pair.get('question', '')) >= 0.6:
+                    return True
+            return False
+
+        pool = [q for q in candidates if not already_answered(q)]
+        if not pool:
+            self.pending_teach = None
+            return (
+                'Пока нечего спрашивать — на базовые темы ответы уже есть. '
+                'Можешь сам что-то объяснить, или скажи «задай вопрос» позже.'
+            )
+
         import random
-        q = random.choice(questions)
+        q = random.choice(pool)
         self.pending_teach['prompt'] = q
         return f'Хорошо, давай поучимся.\n{q}'
 
     def _handle_teach_answer(self, user_input: str) -> str:
         """
-        Сохраняет ответ пользователя на вопрос Протоса.
+        Сохранение ответа пользователя на вопрос Протоса.
         """
+
+        text = user_input.strip()
+
+        if self._is_teach_exit(text):
+            self.pending_teach = None
+            return 'Хорошо, вопросы отложим. Если захочешь продолжить — скажи «давай поучимся».'
+
+        if self._is_teach_reject(text):
+            return self._make_teach_question('user_request')
+
         info = self.pending_teach or {}
         kind = info.get('type', 'user_request')
         prompt = info.get('prompt', '')
         self.pending_teach = None
 
+        if len(text) < 5:
+            return 'Слишком короткий ответ. Можешь чуть развернуть или сказать «пропусти» / «хватит».'
+
         if kind == 'unknown_word' and prompt:
-            pair = f'Слово: {prompt}\nЗначение: {user_input.strip()}'
+            pair = f'Слово: {prompt}\nЗначение: {text}'
             fact_key = prompt.lower()
         else:
-            pair = f'Вопрос: {prompt}\nОтвет: {user_input.strip()}'
+            pair = f'Вопрос: {prompt}\nОтвет: {text}'
             fact_key = None
 
         if self.learning_manager:
             self.learning_manager.learn_from_text(pair, source='teach_dialog')
 
         if fact_key:
-            # простой факт в knowledge_base ассистента
             if 'learned' not in self.knowledge_base:
                 self.knowledge_base['learned'] = []
             if isinstance(self.knowledge_base.get('learned'), list):
@@ -382,11 +523,40 @@ class Assistant:
                     pass
 
         if kind == 'unknown_word' and prompt:
-            self.add_qa_pair(f'что значит {prompt}', user_input.strip(), source='teach')
+            self.add_qa_pair(f'что значит {prompt}', text, source='teach')
         elif prompt:
-            self.add_qa_pair(prompt, user_input.strip(), source='teach')
+            self.add_qa_pair(prompt, text, source='teach')
 
         return 'Спасибо, запомнил. Так я становлюсь чуть понятливее.'
+
+    @staticmethod
+    def _is_teach_exit(text: str) -> bool:
+        """
+        Пользователь хочет закончить учебные вопросы.
+        """
+
+        low = text.lower().strip()
+        exits = [
+            'хватит', 'достаточно', 'стоп', 'не надо', 'не нужно',
+            'хватит вопросов', 'без вопросов', 'потом', 'не сейчас',
+            'закончим', 'стоп учиться', 'не хочу учиться',
+        ]
+        return any(p in low for p in exits)
+
+    @staticmethod
+    def _is_teach_reject(text: str) -> bool:
+        """
+        Отказ / «уже было» / просьба другого вопроса — не сохранять как ответ.
+        """
+
+        low = text.lower().strip()
+        rejects = [
+            'уже отвечал', 'уже отвечалa', 'уже задавал', 'уже спрашивал',
+            'другой вопрос', 'задавай другой', 'следующий вопрос',
+            'не знаю', 'пропусти', 'не хочу отвечать',
+            'этот вопрос', 'на этот вопрос',
+        ]
+        return any(p in low for p in rejects)
 
     def _request_auth(self, lang: str) -> str:
         """
@@ -561,6 +731,7 @@ class Assistant:
         """
         Полная обработка ввода с автоматическим обучением.
         """
+
         debug_logger.debug(f'Обработка ввода: "{user_input[:30]}..." (длина: {len(user_input)})')
         self.conversation_count += 1
         lang = self.text_processor.detect_language(user_input)
@@ -739,17 +910,42 @@ class Assistant:
                     }
 
             # 11. Контекст и генерация
-            context = self.memory.get_context(limit=5)
+            context_events = self.memory.get_context(limit=5)
+            context = [event.content for event in context_events]
             debug_logger.debug(f'Контекст: {len(context)} сообщений')
 
+            thought = self.thought_processor.think(
+                text=user_input,
+                memory=self.memory,
+            )
+            debug_logger.debug(f"Мысль: {thought}")
+            self.memory.record(
+                MemoryEvent(
+                    event_type=MemoryEventType.THOUGHT,
+                    content=thought.original_text,
+                    importance=thought.confidence,
+                )
+            )
+
             debug_logger.debug('Генерация ответа')
-            response = self._generate_natural_response(user_input, context, lang)
+            response = self._route_request(
+                user_input=user_input,
+                context=context,
+                lang=lang,
+            )
             dialog_logger.info(f'🤖 {response}')
 
             # Память
             speaker = self.current_speaker or self.user_name or 'Кто-то'
-            self.memory.add_mes(f'{speaker}: {user_input}', importance=0.5)
-            self.memory.add_mes(f'Протос: {response}', importance=0.3)
+            self.memory.remember_message(
+                f"{speaker}: {user_input}",
+                importance=0.2,
+            )
+
+            self.memory.remember_message(
+                f"Протос: {response}",
+                importance=0.2,
+            )
 
             # Автообучение
             if self.is_learning and self.learning_manager:
@@ -792,6 +988,7 @@ class Assistant:
         """
         Можно ли сохранять пару для обучения.
         """
+
         u = user_input.strip()
         r = response.strip()
         r_low = r.lower()
@@ -799,11 +996,9 @@ class Assistant:
         if len(u) < 3 or len(r) < 3:
             return False
 
-        # команды и служебное
         if u.startswith('/'):
             return False
 
-        # типичный мусор / fallback
         junk = [
             'расскажи мне больше',
             'расскажи подробнее',
@@ -813,18 +1008,27 @@ class Assistant:
             'интересно! расскажи',
             'звучит интересно',
             'хорошо, я запомнил это. что дальше',
+            'продолжай, я слушаю',
         ]
         if any(j in r_low for j in junk):
             return False
 
-        # слишком общий fallback из dialogue_learner
-        if r_low in {
-            'расскажи подробнее, мне интересно.',
-            'interesting! tell me more about it.',
-        }:
+        canned = [
+            'меня зовут протос',
+            'я протос — искусственный интеллект',
+            'ты — артём, мой создатель',
+            'снова привет',
+            'рад тебя видеть, создатель',
+            'до встречи',
+            'вопросы отложим',
+            'спасибо, запомнил. так я становлюсь',
+            'пока нечего спрашивать',
+        ]
+        if any(c in r_low for c in canned):
             return False
 
         return True
+
 
     @staticmethod
     def _extract_knowledge(user_input: str, response: str) -> str | None:
@@ -1225,10 +1429,11 @@ class Assistant:
 
         return ", ".join(result)
 
-    def _generate_natural_response(self, user_input: str, context: list[str], lang: str) -> str:
+    def _route_request(self, user_input: str, context: list[str], lang: str) -> str:
         """
         Естественная генерация ответа с использованием знаний.
         """
+
         debug_logger.debug(f'Генерация естественного ответа на: {user_input[:30]}...')
 
         user_lower = user_input.lower().strip()
@@ -1327,12 +1532,21 @@ class Assistant:
             debug_logger.debug('Обнаружено приветствие')
             return self._generate_natural_greeting(lang)
 
+        if any(p in user_lower for p in [
+            'пока', 'до свидания', 'мне пора', 'увидимся', 'до встречи',
+            'goodbye', 'bye',
+        ]):
+            debug_logger.debug('Прощание')
+            if self.current_speaker:
+                return f'До встречи, {self.current_speaker}!'
+            return 'До встречи!'
+
         # ------------------------------------------------------------------
         # 0.5 База Q&A
         # ------------------------------------------------------------------
-        qa_answer = self.find_qa_answer(user_input)
+        qa_answer = self.qa_matcher.find_answer(user_input)
         if qa_answer:
-            debug_logger.debug('Ответ из Q&A')
+            debug_logger.debug("Ответ найден в Q&A")
             return qa_answer
 
         # ------------------------------------------------------------------
@@ -1919,39 +2133,6 @@ class Assistant:
             return 0.0
         return len(wa & wb) / len(wa | wb)
 
-    def find_qa_answer(self, user_input: str, threshold: float = 0.45) -> str | None:
-        """
-        Ищет ответ на похожий вопрос в базе Q&A.
-        """
-        if not self.qa_pairs:
-            return None
-
-        best_score = 0.0
-        best_answer = None
-        q_norm = self._normalize_question(user_input)
-
-        for pair in self.qa_pairs:
-            question = pair.get('question', '')
-            answer = pair.get('answer', '')
-            if not question or not answer:
-                continue
-
-            # точное совпадение после нормализации
-            if self._normalize_question(question) == q_norm:
-                return answer
-
-            score = self._qa_similarity(user_input, question)
-            if score > best_score:
-                best_score = score
-                best_answer = answer
-
-        if best_score >= threshold and best_answer:
-            debug_logger.debug(f'Q&A match score={best_score:.2f}')
-            return best_answer
-
-        debug_logger.debug(f'Q&A best_score={best_score:.2f} for: {user_input[:40]}')
-
-        return None
 
     def add_qa_pair(self, question: str, answer: str, source: str = 'manual') -> None:
         """
