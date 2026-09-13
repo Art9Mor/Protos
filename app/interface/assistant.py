@@ -279,6 +279,7 @@ class Assistant:
         self._load_user_statuses()
         self._load_relationships()
         self._load_qa_pairs()
+        self._load_facts()
 
         self.qa_matcher = QAMatcher(self.qa_pairs)
 
@@ -1508,7 +1509,7 @@ class Assistant:
             return 'Мой создатель ещё не представился мне.'
 
         if any(p in user_lower for p in [
-            'директив', 'твоя цель', 'твоя задача', 'зачем ты',
+            'директива', 'твоя цель', 'твоя задача', 'зачем ты',
             'твоё назначение', 'твое назначение'
         ]):
             debug_logger.debug('Вопрос о цели/директиве')
@@ -1541,6 +1542,10 @@ class Assistant:
                 return f'До встречи, {self.current_speaker}!'
             return 'До встречи!'
 
+        fact = self.find_fact(user_input)
+        if fact:
+            debug_logger.debug(f'Найден факт: {fact[:50]}...')
+            return fact
         # ------------------------------------------------------------------
         # 0.5 База Q&A
         # ------------------------------------------------------------------
@@ -2085,6 +2090,7 @@ class Assistant:
         """
         Загрузка пар вопрос-ответ.
         """
+
         path = 'data/qa_pairs.json'
         if not os.path.exists(path):
             self.qa_pairs = []
@@ -2104,6 +2110,7 @@ class Assistant:
         """
         Сохранение пар вопрос-ответ.
         """
+
         path = 'data/qa_pairs.json'
         os.makedirs('data', exist_ok=True)
         try:
@@ -2118,6 +2125,7 @@ class Assistant:
         """
         Нормализация вопроса для сравнения.
         """
+
         t = text.lower().strip()
         t = re.sub(r'[?!.,;:…]+', '', t)
         t = re.sub(r'\s+', ' ', t)
@@ -2127,11 +2135,114 @@ class Assistant:
         """
         Простая похожесть: доля общих слов.
         """
+
         wa = set(self._normalize_question(a).split())
         wb = set(self._normalize_question(b).split())
         if not wa or not wb:
             return 0.0
         return len(wa & wb) / len(wa | wb)
+
+    def _load_facts(self) -> None:
+        """
+        Загрузка фактов.
+        """
+
+        path = 'data/facts.json'
+        self.facts: list[dict] = []
+        if not os.path.exists(path):
+            debug_logger.debug('Файл фактов не найден')
+            return
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            self.facts = data if isinstance(data, list) else []
+            debug_logger.debug(f'Загружено фактов: {len(self.facts)}')
+            assistant_logger.info(f'Загружено фактов: {len(self.facts)}')
+        except (json.JSONDecodeError, IOError) as e:
+            error_logger.error(f'Ошибка загрузки фактов: {e}')
+            self.facts = []
+
+    def _save_facts(self) -> None:
+        """
+        Сохранение фактов.
+        """
+
+        path = 'data/facts.json'
+        os.makedirs('data', exist_ok=True)
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(self.facts, f, ensure_ascii=False, indent=2)
+            debug_logger.debug(f'Сохранено фактов: {len(self.facts)}')
+        except IOError as e:
+            error_logger.error(f'Ошибка сохранения фактов: {e}')
+
+    def add_fact(
+            self,
+            subject: str,
+            fact: str,
+            source: str = 'manual',
+            aliases: list[str] | None = None,
+    ) -> None:
+        """
+        Добавить или обновить факт.
+        """
+
+        sub = subject.strip().lower()
+        if not sub or not fact.strip():
+            return
+
+        for item in self.facts:
+            if item.get('subject', '').lower() == sub:
+                item['fact'] = fact.strip()
+                item['source'] = source
+                if aliases is not None:
+                    item['aliases'] = aliases
+                self._save_facts()
+                return
+
+        self.facts.append({
+            'subject': sub,
+            'aliases': aliases or [],
+            'fact': fact.strip(),
+            'source': source,
+        })
+        self._save_facts()
+
+    def find_fact(self, text: str) -> str | None:
+        """
+        Поиск факта по фразе пользователя.
+        """
+
+        if not getattr(self, 'facts', None):
+            return None
+
+        low = text.lower().strip()
+
+        m = re.search(
+            r'(?:кто\s+так(?:ой|ая|ое|ие)|что\s+так(?:ое|ая|ой)|что\s+значит|зачем\s+нужн\w*)\s+(.+?)(?:\?|$)',
+            low,
+        )
+        query = m.group(1).strip(' .!?…') if m else low
+        query = re.sub(r'^(такое|такой|такая|такoe)\s+', '', query).strip()
+
+        best = None
+        best_score = 0.0
+
+        for item in self.facts:
+            keys = [item.get('subject', '')] + list(item.get('aliases') or [])
+            for key in keys:
+                key = (key or '').lower().strip()
+                if not key:
+                    continue
+                if key == query:
+                    return item.get('fact')
+                if key in query or query in key:
+                    score = len(key) / max(len(query), 1)
+                    if score > best_score:
+                        best_score = score
+                        best = item.get('fact')
+
+        return best if best_score >= 0.3 else None
 
 
     def add_qa_pair(self, question: str, answer: str, source: str = 'manual') -> None:
