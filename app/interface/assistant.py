@@ -7,6 +7,7 @@ from pathlib import Path
 from scripts.train_on_books import train_protos_on_books, continue_training_from_saved, BookDownloader
 from ..cognition.thought_processor import ThoughtProcessor
 from ..dialogue.qa_matcher import QAMatcher
+from ..knowledge.facts import FactsStore
 from ..memory.context import ContextMemory
 from ..memory.models import MemoryEvent, MemoryEventType
 from ..memory.retriever import MemoryRetriever
@@ -107,6 +108,7 @@ class Assistant:
         'партнер': {'reverse': 'партнер', 'gender': 'neutral'}
     }
 
+
     def __init__(self, config: dict):
         debug_logger.debug('Начало инициализации Assistant')
         main_logger.info('Инициализация ассистента')
@@ -124,9 +126,16 @@ class Assistant:
         self.relationships: dict[str, dict[str, str]] = {}
         self.known_users: dict[str, dict] = {}
 
+        # Личность и имена создателя
+        self.persona: dict = {}
+        self.creator_aliases: list[str] = []
+        self.preferred_name: str | None = None
+        self.pending_rename: dict | None = None
+
         # Состояние обучения
         self.pending_teach = None
         self.is_learning = True
+        self.gen_only = False
         self.messages_since_last_train = 0
 
         # Секрет создателя
@@ -140,6 +149,7 @@ class Assistant:
         self.waiting_for_status = False
         self.pending_user_name = None
         self.current_speaker = None
+        self.session_authenticated = False
         self.user_name = None
         self.conversation_count = 0
 
@@ -165,6 +175,7 @@ class Assistant:
         debug_logger.debug("Инициализация Assistant завершена")
         main_logger.success("Ассистент инициализирован")
 
+
     def _init_cognition(self) -> None:
         """
         Инициализация когнитивного слоя.
@@ -175,6 +186,7 @@ class Assistant:
         self.thought_processor = ThoughtProcessor()
 
         debug_logger.debug("Когнитивный слой инициализирован")
+
 
     def _init_memory(self) -> None:
         """
@@ -192,6 +204,7 @@ class Assistant:
         memory_logger.debug(
             f'Память инициализирована: max_size={self.config.get("memory_size", 100)}'
         )
+
 
     def _bootstrap_memory(self) -> None:
         """
@@ -230,6 +243,7 @@ class Assistant:
             )
         )
 
+
     def _init_system(self) -> None:
         """
         Инициализация системных компонентов.
@@ -240,6 +254,7 @@ class Assistant:
         self.fs_manager = FileSystemManager()
 
         fs_logger.debug("Файловая система инициализирована")
+
 
     def _init_processing(self) -> None:
         """
@@ -253,6 +268,7 @@ class Assistant:
             embedding_dim=self.config.get("embedding_dim", 100),
         )
 
+
     def _init_learning(self) -> None:
         """
         Инициализация системы обучения.
@@ -262,12 +278,13 @@ class Assistant:
 
         self.learning_manager = LearningManager(
             self.text_processor,
-            hidden_size=128,
+            hidden_size=self.config.get('hidden_size', 128),
         )
 
         self.dialogue_learner = DialogueLearner()
 
         training_logger.debug("Менеджер обучения инициализирован")
+
 
     def _load_data(self) -> None:
         """
@@ -279,11 +296,12 @@ class Assistant:
         self._load_user_statuses()
         self._load_relationships()
         self._load_qa_pairs()
-        self._load_facts()
+        self.facts_store = FactsStore('data/facts.json')
 
         self.qa_matcher = QAMatcher(self.qa_pairs)
 
         self._load_model()
+
 
     def _load_model(self) -> None:
         """
@@ -309,10 +327,12 @@ class Assistant:
 
         self._train_on_basic_examples()
 
+
     def _load_user_statuses(self) -> None:
         """
         Загрузка статусов пользователей.
         """
+
         status_path = 'data/user_statuses.json'
         debug_logger.debug(f'Загрузка статусов из {status_path}')
         assistant_logger.debug(f'Загрузка статусов из {status_path}')
@@ -325,15 +345,16 @@ class Assistant:
                     self.creator_name = data.get('creator_name', None)
                     self.owner_name = data.get('owner_name', None)
                     self.known_users = data.get('known_users', {})
+                    self.creator_aliases = data.get('creator_aliases') or []
+                    self.preferred_name = data.get('preferred_name') or self.creator_name
+                    self.creator_aliases = data.get('creator_aliases') or []
 
-                # Восстанавливаем текущего говорящего
                 if self.creator_name:
                     self.current_speaker = self.creator_name
                     self.user_name = self.creator_name
                     self.user_role = 'creator'
                     debug_logger.debug(f'Восстановлен создатель: {self.creator_name}')
                 elif self.known_users:
-                    # Берём первого известного пользователя
                     first_user = next(iter(self.known_users))
                     self.current_speaker = first_user
                     self.user_name = first_user
@@ -346,6 +367,7 @@ class Assistant:
                 debug_logger.debug(f'Ошибка загрузки статусов: {e}')
         else:
             debug_logger.debug('Файл статусов не найден')
+
 
     def _load_creator_secret(self) -> None:
         """
@@ -364,6 +386,7 @@ class Assistant:
             except (json.JSONDecodeError, IOError) as e:
                 error_logger.error(f'Ошибка загрузки секрета: {e}')
 
+
     def _save_creator_secret(self) -> None:
         """
         Сохранение секретной фразы.
@@ -381,6 +404,7 @@ class Assistant:
         except IOError as e:
             error_logger.error(f'Ошибка сохранения секрета: {e}')
 
+
     def _check_secret_phrase(self, text: str) -> bool:
         """
         Проверка секретной фразы.
@@ -393,11 +417,217 @@ class Assistant:
         normalized = normalized.rstrip('.,!?;:…')
         return normalized == self.creator_secret
 
+
+    def _creator_names(self) -> set[str]:
+        """
+        Все имена создателя (канон + алиасы), в нижнем регистре.
+        """
+
+        names: set[str] = set()
+
+        for src in (
+                self.creator_name,
+                getattr(self, 'creator_aliases', None) or [],
+                (self.persona or {}).get('creator'),
+                (self.persona or {}).get('creator_aliases') or [],
+        ):
+            if isinstance(src, str) and src.strip():
+                names.add(src.strip().lower())
+            elif isinstance(src, (list, tuple)):
+                for x in src:
+                    if x and str(x).strip():
+                        names.add(str(x).strip().lower())
+
+        for uname, info in (self.known_users or {}).items():
+            status = (info or {}).get('status') or self.user_statuses.get(uname)
+            if status == 'creator':
+                names.add(uname.lower())
+                for a in (info or {}).get('aliases') or []:
+                    if a:
+                        names.add(str(a).strip().lower())
+
+        return names
+
+
+    def _address_name(self) -> str:
+        return (
+                self.preferred_name
+                or self.current_speaker
+                or self._canonical_creator_name()
+        )
+
+
+    def _handle_add_creator_alias(self, text: str, lang: str) -> str | None:
+        """
+        «Зови меня X» для создателя.
+        """
+
+        if self.user_role != 'creator' and not self._is_creator_name(self.current_speaker):
+            return None
+
+        low = text.lower().strip()
+        m = re.search(
+            r'(?:зови\s+меня|называй\s+меня|мне\s+можно\s+звать|'
+            r'меня\s+также\s+зовут|меня\s+ещё\s+зовут|меня\s+еще\s+зовут)\s+'
+            r'([A-Za-zА-ЯЁа-яё]{2,40})',
+            low,
+            re.IGNORECASE,
+        )
+        if not m:
+            return None
+
+        alias = m.group(1).strip()
+
+        if alias.isascii():
+            alias = alias[:1].upper() + alias[1:]
+        else:
+            alias = alias.capitalize()
+
+        if alias.lower() in {'создатель', 'друг', 'пожалуйста', 'просто', 'теперь'}:
+            return None
+
+        known = self._creator_names()
+        if alias.lower() in known or alias.lower() == (self.preferred_name or '').lower():
+            self.preferred_name = alias
+            self._sync_creator_identity_files()
+            if lang == 'ru':
+                return f'Хорошо, буду звать тебя {alias}.'
+            return f'Alright, I will call you {alias}.'
+
+        self.pending_rename = {'candidate': alias}
+        if lang == 'ru':
+            return f'«{alias}» — это твоё новое имя? Запомнить его и дальше звать тебя так?'
+        return f'Is «{alias}» your new name? Should I remember it and call you that?'
+
+
+    def _handle_rename_confirm(self, text: str, lang: str) -> str | None:
+        """
+        Ответ на вопрос про новое имя.
+        """
+        if not self.pending_rename:
+            return None
+
+        low = text.lower().strip()
+        candidate = self.pending_rename.get('candidate')
+        yes = any(p in low for p in [
+            'да', 'ага', 'угу', 'конечно', 'запомни', 'давай', 'хорошо', 'ок', 'yes',
+        ])
+        no = any(p in low for p in [
+            'нет', 'не надо', 'не нужно', 'отмена', 'не запоминай', 'no',
+        ])
+
+        if not yes and not no:
+            if lang == 'ru':
+                return 'Ответь, пожалуйста: запомнить это имя (да) или нет?'
+            return 'Please answer yes or no: should I remember this name?'
+
+        self.pending_rename = None
+
+        if no:
+            if lang == 'ru':
+                return 'Хорошо, ничего не меняю.'
+            return 'Okay, I will not change anything.'
+
+        if not self.creator_aliases:
+            self.creator_aliases = []
+        if candidate.lower() not in {a.lower() for a in self.creator_aliases}:
+            self.creator_aliases.append(candidate)
+
+        canonical = self._canonical_creator_name()
+        info = self.known_users.setdefault(
+            canonical, {'status': 'creator', 'relations': {}, 'aliases': []}
+        )
+        al = info.setdefault('aliases', [])
+        if candidate not in al and candidate.lower() != canonical.lower():
+            al.append(candidate)
+
+        self.preferred_name = candidate
+        self._sync_creator_identity_files()
+
+        if lang == 'ru':
+            return f'Запомнил. Теперь буду звать тебя {candidate}.'
+        return f'Saved. I will call you {candidate} from now on.'
+
+
+    def _sync_creator_identity_files(self) -> None:
+        """
+        Сохранение preferred/aliases в statuses и persona для создателя.
+        """
+
+        self._save_user_statuses()
+        if not isinstance(self.persona, dict):
+            return
+        self.persona['creator_aliases'] = list(
+            dict.fromkeys(
+                [self._canonical_creator_name()]
+                + list(self.creator_aliases or [])
+                + list(self.persona.get('creator_aliases') or [])
+            )
+        )
+        pref = self.preferred_name or self._canonical_creator_name()
+        self.persona['address_creator_as'] = pref
+        try:
+            with open('data/persona.json', 'w', encoding='utf-8') as f:
+                json.dump(self.persona, f, ensure_ascii=False, indent=2)
+        except IOError as e:
+            error_logger.error(f'Ошибка сохранения persona: {e}')
+
+
+    def _is_creator_name(self, name: str | None) -> bool:
+        if not name:
+            return False
+        return name.strip().lower() in self._creator_names()
+
+
+    def _canonical_creator_name(self) -> str:
+        return (
+                self.creator_name
+                or (self.persona or {}).get('creator')
+                or 'Создатель'
+        )
+
+
+    def _resolve_to_canonical_user(self, name: str) -> str:
+        """
+        Если имя — алиас создателя, вернуть каноническое имя создателя.
+        """
+        if self._is_creator_name(name):
+            return self._canonical_creator_name()
+        return name
+
+
+    @staticmethod
+    def _wants_to_teach(text: str) -> bool:
+        """
+        Явная просьба записать знание в память Протоса.
+        """
+
+        t = text.lower().strip()
+        t = re.sub(r'[.!?…]+$', '', t).strip()
+        triggers = (
+            'запомни',
+            'запомни это',
+            'выучи',
+            'изучи',
+            'запиши',
+            'запиши это',
+            'добавь знание',
+            'это знание',
+            'remember',
+            'remember this',
+        )
+        return any(
+            t == tr or t.startswith(tr + ' ') or t.startswith(tr + ':')
+            for tr in triggers
+        )
+
+
     @staticmethod
     def _wants_to_be_asked(text: str) -> bool:
         """
         Прямая просьба задать вопрос / поучиться.
         """
+
         t = text.lower()
         triggers = [
             'задай вопрос', 'задайте вопрос', 'спроси меня', 'спросите меня',
@@ -405,6 +635,7 @@ class Assistant:
             'проверь меня', 'хочу поучиться', 'задавай вопросы',
         ]
         return any(p in t for p in triggers)
+
 
     def _find_unknown_word(self, text: str) -> str | None:
         """
@@ -428,6 +659,7 @@ class Assistant:
                 return w
         return None
 
+
     def _make_teach_question(self, kind: str, word: str | None = None) -> str:
         """
         Формулирует вопрос Протоса.
@@ -448,6 +680,7 @@ class Assistant:
             'Что такое переобучение простыми словами?',
         ]
 
+
         def already_answered(question: str) -> bool:
             qn = self._normalize_question(question)
             for pair in self.qa_pairs:
@@ -463,6 +696,7 @@ class Assistant:
                     return True
             return False
 
+
         pool = [q for q in candidates if not already_answered(q)]
         if not pool:
             self.pending_teach = None
@@ -476,59 +710,69 @@ class Assistant:
         self.pending_teach['prompt'] = q
         return f'Хорошо, давай поучимся.\n{q}'
 
+
     def _handle_teach_answer(self, user_input: str) -> str:
         """
-        Сохранение ответа пользователя на вопрос Протоса.
+        Ответ пользователя в режиме записи знания (урок / unknown_word / вопрос Протоса).
         """
 
-        text = user_input.strip()
+        text = (user_input or '').strip()
+        info = self.pending_teach or {}
+        kind = info.get('type', 'user_request')
+        prompt = info.get('prompt', '')
 
         if self._is_teach_exit(text):
             self.pending_teach = None
-            return 'Хорошо, вопросы отложим. Если захочешь продолжить — скажи «давай поучимся».'
+            return 'Заапись отменена. Если захочешь продолжить - скажи «запомни» или «давай поучимся».'
+
+        if self.user_role not in ('creator', 'owner'):
+            self.pending_teach = None
+            return 'Доступ запрещён.\nЗаписывать знания в мою базу могут только создатель или владелец.'
+
+        if kind == 'explicit_qa':
+            pair = self._parse_teach_pair(text)
+            if not pair:
+                return (
+                    'Не разобрал пару. Формат:\n'
+                    'Вопрос: …\nОтвет: …\n'
+                    'Или «отмена».'
+                )
+            q, a = pair
+            self.pending_teach = None
+            self.add_qa_pair(q, a, source='teach')
+            if self.learning_manager:
+                self.learning_manager.learn_from_text(
+                    f'Вопрос: {q}\nОтвет: {a}',
+                    source='teach',
+                )
+            return f'Запомнил.\nВопрос: {q}\nОтвет: {a}'
 
         if self._is_teach_reject(text):
             return self._make_teach_question('user_request')
 
-        info = self.pending_teach or {}
-        kind = info.get('type', 'user_request')
-        prompt = info.get('prompt', '')
-        self.pending_teach = None
-
         if len(text) < 5:
-            return 'Слишком короткий ответ. Можешь чуть развернуть или сказать «пропусти» / «хватит».'
+            return 'Слишком короткий ответ. Чуть разверни или скажи «пропусти» / «хватит».'
+
+        self.pending_teach = None
 
         if kind == 'unknown_word' and prompt:
             pair = f'Слово: {prompt}\nЗначение: {text}'
-            fact_key = prompt.lower()
-        else:
-            pair = f'Вопрос: {prompt}\nОтвет: {text}'
-            fact_key = None
-
-        if self.learning_manager:
-            self.learning_manager.learn_from_text(pair, source='teach_dialog')
-
-        if fact_key:
-            if 'learned' not in self.knowledge_base:
-                self.knowledge_base['learned'] = []
-            if isinstance(self.knowledge_base.get('learned'), list):
-                self.knowledge_base['learned'].append({
-                    'knowledge': pair,
-                    'timestamp': time.time(),
-                    'source': 'teach_dialog',
-                })
-                try:
-                    with open('data/knowledge_base.json', 'w', encoding='utf-8') as f:
-                        json.dump(self.knowledge_base, f, ensure_ascii=False, indent=2)
-                except IOError:
-                    pass
-
-        if kind == 'unknown_word' and prompt:
+            if self.learning_manager:
+                self.learning_manager.learn_from_text(pair, source='teach_dialog')
             self.add_qa_pair(f'что значит {prompt}', text, source='teach')
-        elif prompt:
-            self.add_qa_pair(prompt, text, source='teach')
+            return 'Запомнил значение слова.'
 
-        return 'Спасибо, запомнил. Так я становлюсь чуть понятливее.'
+        if prompt:
+            if self.learning_manager:
+                self.learning_manager.learn_from_text(
+                    f'Вопрос: {prompt}\nОтвет: {text}',
+                    source='teach_dialog',
+                )
+            self.add_qa_pair(prompt, text, source='teach')
+            return 'Спасибо, запомнил. Так я становлюсь чуть понятливее.'
+
+        return 'Не понял, что сохранять. Скажи «запомни» и пришли пару Вопрос/Ответ.'
+
 
     @staticmethod
     def _is_teach_exit(text: str) -> bool:
@@ -544,6 +788,7 @@ class Assistant:
         ]
         return any(p in low for p in exits)
 
+
     @staticmethod
     def _is_teach_reject(text: str) -> bool:
         """
@@ -558,6 +803,7 @@ class Assistant:
             'этот вопрос', 'на этот вопрос',
         ]
         return any(p in low for p in rejects)
+
 
     def _request_auth(self, lang: str) -> str:
         """
@@ -575,6 +821,7 @@ class Assistant:
             f"Hint: {self.creator_secret_hint}"
         )
 
+
     def _save_user_statuses(self) -> None:
         """
         Сохранение статусов пользователей.
@@ -587,7 +834,9 @@ class Assistant:
         data = {
             'statuses': self.user_statuses,
             'creator_name': self.creator_name,
+            'creator_aliases': getattr(self, 'creator_aliases', []) or (self.persona or {}).get('creator_aliases', []),
             'owner_name': self.owner_name,
+            'preferred_name': self.preferred_name or self.creator_name,
             'known_users': self.known_users
         }
 
@@ -599,6 +848,7 @@ class Assistant:
         except IOError as e:
             error_logger.error(f'Ошибка сохранения статусов: {e}')
             debug_logger.debug(f'Ошибка сохранения статусов: {e}')
+
 
     def _load_relationships(self) -> None:
         """
@@ -621,6 +871,7 @@ class Assistant:
         else:
             debug_logger.debug('Файл связей не найден')
 
+
     def _save_relationships(self) -> None:
         """
         Сохранение связей между пользователями.
@@ -639,44 +890,32 @@ class Assistant:
             error_logger.error(f'Ошибка сохранения связей: {e}')
             debug_logger.debug(f'Ошибка сохранения связей: {e}')
 
+
     def _train_on_basic_examples(self) -> None:
         """
-        Базовое обучение на примерах.
+        Базовое обучение: короткие Q&A под формат генерации.
         """
 
-        debug_logger.debug('Начало базового обучения')
         training_logger.info('Начало базового обучения')
 
         examples = [
-            "Привет, я Протос - искусственный интеллект. Я создан, чтобы помогать людям.",
-            "Я учусь понимать язык и общаться с людьми.",
-            "Мне интересно узнавать новое и помогать людям.",
-            "Наука и технологии - это увлекательно.",
-            "Каждый день я становлюсь умнее и лучше.",
-            "Я могу запоминать информацию и использовать ее в разговоре.",
-            "Я учусь на книгах и диалогах с людьми.",
-            "Мне важно понимать эмоции и настроение собеседника.",
-            "Я стараюсь быть внимательным и добрым.",
-            "Моя цель - стать идеальным помощником для человека.",
-            "Я могу учиться на своих ошибках и становиться лучше.",
-            "Общение с людьми помогает мне развиваться.",
-            "Я хочу понимать мир и помогать людям в нем.",
-            "Каждый диалог делает меня умнее.",
-            "Я учусь на книгах, статьях и разговорах."
+            'Вопрос: Кто ты?\nОтвет: Я Протос — искусственный интеллект. Я учусь понимать язык и помогать людям.',
+            'Вопрос: Как тебя зовут?\nОтвет: Меня зовут Протос.',
+            'Вопрос: Какова твоя директива?\nОтвет: Моя главная задача — учиться понимать язык, помнить контекст и помогать тебе.',
+            'Вопрос: Что такое переобучение?\nОтвет: Переобучение — когда модель запоминает примеры вместо общих закономерностей и хуже работает на новых данных.',
+            'Вопрос: Что такое обучение с учителем?\nОтвет: Обучение с учителем — когда модели дают входы и правильные ответы, и она учится этой связи.',
+            'Вопрос: Зачем нужна память в диалоге?\nОтвет: Память нужна, чтобы помнить, о чём говорили, и вести связный разговор.',
+            'Вопрос: Что ты умеешь?\nОтвет: Я учусь на диалогах и фактах, храню контекст и помогаю создателю.',
+            'Вопрос: Ты человек?\nОтвет: Нет, я программа — локальный искусственный интеллект.',
         ]
 
-        debug_logger.debug(f'Добавлено {len(examples)} примеров для базового обучения')
-        training_logger.debug(f'Добавлено {len(examples)} примеров для базового обучения')
-
         for example in examples:
-            self.learning_manager.learn_from_text(example, source="basic_training")
+            self.learning_manager.learn_from_text(example, source='basic_training')
 
-        debug_logger.debug('Запуск обучения на базовых примерах')
-        self.learning_manager.train(epochs=20, sequence_length=40)
+        self.learning_manager.train(epochs=50, sequence_length=25)
         self.learning_manager.save_model('models/protos_lstm.json')
+        training_logger.info('Базовое обучение завершено')
 
-        debug_logger.debug('Базовое обучение завершено')
-        training_logger.success('Базовое обучение завершено')
 
     @staticmethod
     def _load_knowledge_base() -> dict:
@@ -728,10 +967,28 @@ class Assistant:
 
         return knowledge
 
+
     def process_input(self, user_input: str) -> dict:
         """
         Полная обработка ввода с автоматическим обучением.
         """
+
+        text = (user_input or '').strip()
+        if not text:
+            lang = getattr(self, '_last_lang', 'ru') or 'ru'
+            if lang == 'ru':
+                response = 'Напиши что-нибудь — пустое сообщение я не разбираю.'
+            else:
+                response = "Please type something — empty messages aren't processed."
+            dialog_logger.info(f'🤖 {response}')
+            return {
+                'response': response,
+                'language': lang,
+                'memory_size': len(self.memory),
+                'is_learning': self.is_learning,
+                'user_role': self.user_role,
+                'current_user': self.current_speaker,
+            }
 
         debug_logger.debug(f'Обработка ввода: "{user_input[:30]}..." (длина: {len(user_input)})')
         self.conversation_count += 1
@@ -808,6 +1065,33 @@ class Assistant:
                         'current_user': self.current_speaker
                     }
 
+            # 3.1 Подтверждение нового имени («да» / «нет» после «Зови меня X»)
+            if getattr(self, 'pending_rename', None):
+                response = self._handle_rename_confirm(user_input, lang)
+                if response:
+                    dialog_logger.info(f'🤖 {response}')
+                    return {
+                        'response': response,
+                        'language': lang,
+                        'memory_size': len(self.memory),
+                        'is_learning': self.is_learning,
+                        'user_role': self.user_role,
+                        'current_user': self.current_speaker,
+                    }
+
+            # 3.2 «Зови меня …» / «меня также зовут …»
+            alias_reply = self._handle_add_creator_alias(user_input, lang)
+            if alias_reply:
+                dialog_logger.info(f'🤖 {alias_reply}')
+                return {
+                    'response': alias_reply,
+                    'language': lang,
+                    'memory_size': len(self.memory),
+                    'is_learning': self.is_learning,
+                    'user_role': self.user_role,
+                    'current_user': self.current_speaker,
+                }
+
             # 4. Ответ на учебный вопрос Протоса
             if getattr(self, 'pending_teach', None) is not None:
                 response = self._handle_teach_answer(user_input)
@@ -819,6 +1103,32 @@ class Assistant:
                     'is_learning': self.is_learning,
                     'user_role': self.user_role,
                     'current_user': self.current_speaker
+                }
+
+            # 4.1 Явный урок для Протоса
+            if self._wants_to_teach(user_input):
+
+                if self.user_role not in ('creator', 'owner'):
+                    response = 'Записывать знания в мою базу может только создатель (или владелец).'
+                    dialog_logger.info(f'🤖 {response}')
+                    return {
+                        'response': response,
+                        'language': lang,
+                        'memory_size': len(self.memory),
+                        'is_learning': self.is_learning,
+                        'user_role': self.user_role,
+                        'current_user': self.current_speaker,
+                    }
+
+                response = self._start_teach_lesson(user_input, lang)
+                dialog_logger.info(f'🤖 {response}')
+                return {
+                    'response': response,
+                    'language': lang,
+                    'memory_size': len(self.memory),
+                    'is_learning': self.is_learning,
+                    'user_role': self.user_role,
+                    'current_user': self.current_speaker,
                 }
 
             # 5. Просьба «задай вопрос / поучимся»
@@ -934,22 +1244,36 @@ class Assistant:
                 context=context,
                 lang=lang,
             )
+
+            shutdown = False
+            if isinstance(response, str) and response.startswith('__SHUTDOWN__'):
+                shutdown = True
+                response = response[len('__SHUTDOWN__'):]
+
             dialog_logger.info(f'🤖 {response}')
 
             # Память
             speaker = self.current_speaker or self.user_name or 'Кто-то'
             self.memory.remember_message(
-                f"{speaker}: {user_input}",
+                f'{speaker}: {user_input}',
                 importance=0.2,
             )
-
             self.memory.remember_message(
-                f"Протос: {response}",
+                f'Протос: {response}',
                 importance=0.2,
             )
 
             # Автообучение
-            if self.is_learning and self.learning_manager:
+            layer = getattr(self, '_last_answer_layer', '') or ''
+
+            if layer in (
+                    'lstm', 'fallback', 'lstm_forced', 'lstm_empty',
+                    'teach', 'greeting', 'farewell', 'help', 'system',
+                    'qa', 'facts', 'persona', 'identity',
+            ):
+                pass
+
+            elif self.is_learning and self.learning_manager and not getattr(self, 'gen_only', False):
                 if self._should_learn_pair(user_input, response):
                     knowledge = self._extract_knowledge(user_input, response)
                     if knowledge:
@@ -958,11 +1282,11 @@ class Assistant:
 
                     self.learning_manager.learn_from_text(
                         f'Пользователь: {user_input}\nПротос: {response}',
-                        source='conversation'
+                        source='conversation',
                     )
 
-                    if not user_input.startswith('/'):
-                        self.dialogue_learner.learn_from_conversation(user_input, response)
+                    # if not user_input.startswith('/'):
+                    #     self.dialogue_learner.learn_from_conversation(user_input, response)
 
                 self.messages_since_last_train += 1
                 if self.messages_since_last_train >= 20:
@@ -977,12 +1301,60 @@ class Assistant:
                 'memory_size': len(self.memory),
                 'is_learning': self.is_learning,
                 'user_role': self.user_role,
-                'current_user': self.current_speaker
+                'current_user': self.current_speaker,
+                'shutdown': shutdown,
             }
 
         except Exception as e:
             error_logger.exception(f'Ошибка обработки ввода: {e}')
             raise
+
+
+    def _start_teach_lesson(self, user_input: str, lang: str) -> str:
+        """
+        Старт записи знания.
+        """
+
+        pair = self._parse_teach_pair(user_input)
+        if pair:
+            q, a = pair
+            self.add_qa_pair(q, a, source='teach')
+            if self.learning_manager:
+                self.learning_manager.learn_from_text(
+                    f'Вопрос: {q}\nОтвет: {a}',
+                    source='teach',
+                )
+            self.pending_teach = None
+            return f'Запомнил.\nВопрос: {q}\nОтвет: {a}'
+
+        self.pending_teach = {'type': 'explicit_qa', 'step': 'await_pair'}
+        return (
+            'Хорошо, записываю.\n'
+            'Пришли в одном сообщении:\n'
+            'Вопрос: …\nОтвет: …\n'
+            'Или «отмена».'
+        )
+
+
+    @staticmethod
+    def _parse_teach_pair(text: str) -> tuple[str, str] | None:
+        """
+        Извлечение вопроса и ответа из текста урока.
+        """
+
+        m = re.search(
+            r'(?:вопрос|question)\s*:\s*(.+?)\s*(?:ответ|answer)\s*:\s*(.+)',
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not m:
+            return None
+        q = m.group(1).strip().strip(' \n')
+        a = m.group(2).strip().strip(' \n')
+        if len(q) < 2 or len(a) < 2:
+            return None
+        return q, a
+
 
     @staticmethod
     def _should_learn_pair(user_input: str, response: str) -> bool:
@@ -1028,30 +1400,60 @@ class Assistant:
         if any(c in r_low for c in canned):
             return False
 
+        if r_low.startswith('(lstm') or 'ничего внятного' in r_low:
+            return False
+
+        if 'уже отвечал' in r_low or 'уже задавал' in r_low:
+            return False
+
         return True
 
 
     @staticmethod
     def _extract_knowledge(user_input: str, response: str) -> str | None:
         """
-        Извлечение знаний из диалога (статический метод).
+        Извлечение знаний из диалога.
+        Только явные факты вида «это …», не каждый вопрос с ?.
         """
 
-        if any(word in user_input for word in ['это', 'этот', 'эта', 'это -']):
-            fact_match = re.search(r'это\s+([^.!?]+)', user_input)
-            if fact_match:
-                return f"Знание: {fact_match.group(1).strip()}"
+        u = (user_input or '').strip()
+        r = (response or '').strip()
+        if len(u) < 5 or len(r) < 5:
+            return None
 
-        if '?' in user_input:
-            return f"Вопрос: {user_input}\nОтвет: {response}"
+        r_low = r.lower()
+        junk = (
+            'привет',
+            'рад тебя',
+            'рад, что ты',
+            'расскажи',
+            'lstm',
+            'ничего внятного',
+            'вопрос:',
+            'как дела',
+        )
+        if any(j in r_low for j in junk):
+            return None
+
+        fact_match = re.search(
+            r'(?:это|значит)\s+([^.!?]{5,120})',
+            u,
+            flags=re.IGNORECASE,
+        )
+        if fact_match:
+            return f'Знание: {fact_match.group(1).strip()}'
 
         return None
 
-    @staticmethod
-    def _save_to_knowledge_base(knowledge: str) -> None:
+
+    def _save_to_knowledge_base(self, knowledge: str) -> None:
         """
-        Сохранение знания в базу знаний.
+        Сохранение знания в базу (без дубликатов).
         """
+
+        knowledge = (knowledge or '').strip()
+        if not knowledge:
+            return
 
         kb_path = 'data/knowledge_base.json'
 
@@ -1064,13 +1466,19 @@ class Assistant:
         else:
             kb = {}
 
-        if 'learned' not in kb:
+        if 'learned' not in kb or not isinstance(kb.get('learned'), list):
             kb['learned'] = []
+
+        norm = ' '.join(knowledge.lower().split())
+        for item in kb['learned']:
+            existing = (item.get('knowledge') or '')
+            if ' '.join(existing.lower().split()) == norm:
+                return
 
         kb['learned'].append({
             'knowledge': knowledge,
             'timestamp': time.time(),
-            'source': 'conversation'
+            'source': 'conversation',
         })
 
         try:
@@ -1078,6 +1486,7 @@ class Assistant:
                 json.dump(kb, f, ensure_ascii=False, indent=2)
         except IOError:
             pass
+
 
     @staticmethod
     def _is_introduction(text: str) -> bool:
@@ -1103,6 +1512,35 @@ class Assistant:
                 return False
             return True
         return any(re.search(p, text_lower, re.IGNORECASE) for p in patterns[:6])
+
+
+    @staticmethod
+    def _lstm_reply_ok(text: str) -> bool:
+        """
+        Проверка, что ответ LSTM достаточно осмысленный для показа пользователю.
+        """
+
+        t = (text or '').strip()
+        if len(t) < 12:
+            return False
+
+        low = t.lower()
+        words = [w for w in re.findall(r'[а-яёa-z0-9]+', low) if len(w) > 1]
+        if len(words) < 4:
+            return False
+
+        if len(words) >= 6 and len(set(words)) <= len(words) // 2:
+            return False
+
+        bad = (
+            'вопрос', 'ответ', 'пользователь', 'протос', 'директива',
+            'фактах', 'переобучение', 'зовут', 'модели', 'память',
+        )
+        if sum(1 for b in bad if b in low) >= 1:
+            return False
+
+        return True
+
 
     def _handle_introduction(self, text: str, lang: str) -> str:
         """
@@ -1146,9 +1584,15 @@ class Assistant:
             debug_logger.debug(f'Отброшено ложное имя: {name}')
             name = None
 
+        # алиас создателя → каноническое имя
+        if name:
+            name = self._resolve_to_canonical_user(name)
+
         status = self._extract_status_from_text(text_lower)
         if not status and 'создатель' in text_lower:
             status = 'creator'
+        if name and self._is_creator_name(name):
+            status = status or 'creator'
 
         if not name and self.current_speaker:
             name = self.current_speaker
@@ -1173,12 +1617,13 @@ class Assistant:
             self.known_users[name] = {
                 'status': status or 'user',
                 'relations': {},
+                'aliases': [],
             }
         elif status:
             self.known_users[name]['status'] = status
 
         if rel_type and rel_name:
-            self.known_users[name]['relations'][rel_type] = rel_name
+            self.known_users[name].setdefault('relations', {})[rel_type] = rel_name
             self._add_relationship(name, rel_type, rel_name)
             debug_logger.debug(f'Добавлена связь: {name} -> {rel_type}: {rel_name}')
 
@@ -1186,10 +1631,7 @@ class Assistant:
         self.user_name = name
 
         if status == 'creator' and self.user_role != 'creator':
-            self.current_speaker = name
-            self.user_name = name
-            if name not in self.known_users:
-                self.known_users[name] = {'status': 'user', 'relations': {}}
+            self.creator_name = self._canonical_creator_name()
             self._save_user_statuses()
             return self._request_auth(lang)
 
@@ -1200,17 +1642,18 @@ class Assistant:
         debug_logger.debug(f'Пользователь {name} сохранён')
 
         if lang == 'ru':
-            if status == 'creator':
+            if status == 'creator' or self._is_creator_name(name):
                 return f'Привет, {name}! Я ждал тебя. Ты мой создатель!'
             if rel_type and rel_name:
                 return f'А, так ты {rel_type} {rel_name}! Приятно познакомиться, {name}!'
             return f'Привет, {name}! Рад познакомиться.'
-        else:
-            if status == 'creator':
-                return f"Hello, {name}! I've been waiting for you. You are my creator!"
-            if rel_type and rel_name:
-                return f"Oh, so you're {rel_name}'s {rel_type}! Nice to meet you, {name}!"
-            return f'Hello, {name}! Nice to meet you.'
+
+        if status == 'creator' or self._is_creator_name(name):
+            return f"Hello, {name}! I've been waiting for you. You are my creator!"
+        if rel_type and rel_name:
+            return f"Oh, so you're {rel_name}'s {rel_type}! Nice to meet you, {name}!"
+        return f'Hello, {name}! Nice to meet you.'
+
 
     @staticmethod
     def _is_about_someone(text: str) -> bool:
@@ -1230,6 +1673,7 @@ class Assistant:
             'а это'
         ]
         return any(p in text_lower for p in patterns)
+
 
     def _handle_about_someone(self, text: str, lang: str) -> str | None:
         """
@@ -1269,6 +1713,7 @@ class Assistant:
         else:
             return f"Got it! {name} is your {rel_type}. I'll know if they speak."
 
+
     def _is_relationship_statement(self, text: str) -> bool:
         """
         Проверка, говорит ли пользователь о связях.
@@ -1279,6 +1724,7 @@ class Assistant:
             if re.search(rf'(?<!\w){re.escape(word)}(?!\w)', text_lower):
                 return True
         return False
+
 
     def _handle_relationship_statement(self, text: str, lang: str) -> str | None:
         """
@@ -1308,17 +1754,27 @@ class Assistant:
         else:
             return f"Remembered: {name} is your {rel_type}."
 
+
     def _identify_speaker(self, text: str) -> str | None:
         """
         Определение говорящего по контексту.
         """
+        low = text.lower()
+
+        for alias in self._creator_names():
+            if alias and alias in low:
+                canonical = self._canonical_creator_name()
+                debug_logger.debug(f'Говорящий (создатель/алиас): {canonical}')
+                return canonical
 
         for user in self.known_users.keys():
-            if user.lower() in text.lower():
-                debug_logger.debug(f'Говорящий определен по контексту: {user}')
-                return user
+            if user.lower() in low:
+                resolved = self._resolve_to_canonical_user(user)
+                debug_logger.debug(f'Говорящий определен по контексту: {resolved}')
+                return resolved
 
         return self.current_speaker
+
 
     @staticmethod
     def _extract_status_from_text(text: str) -> str | None:
@@ -1337,6 +1793,7 @@ class Assistant:
         elif 'пользователь' in text or 'юзер' in text:
             return 'user'
         return None
+
 
     def _apply_status(self, name: str, status: str) -> None:
         """
@@ -1365,6 +1822,7 @@ class Assistant:
         self._save_user_statuses()
         debug_logger.debug(f'Статус {status} применен к {name}')
 
+
     def _extract_relationship(self, text: str) -> tuple[str | None, str | None]:
         """
         Извлечение связи из текста.
@@ -1384,6 +1842,7 @@ class Assistant:
                 return rel_type, name
 
         return None, None
+
 
     def _add_relationship(self, person: str, relation: str, related: str) -> None:
         """
@@ -1412,6 +1871,7 @@ class Assistant:
         debug_logger.debug(f'Связь сохранена: {person} -> {relation}: {related}')
         assistant_logger.debug(f'Связь сохранена: {person} -> {relation}: {related}')
 
+
     def _get_relationship_info(self, name: str) -> str | None:
         """
         Получение информации о связях человека.
@@ -1430,6 +1890,17 @@ class Assistant:
 
         return ", ".join(result)
 
+
+    def _answer(self, text: str, layer: str) -> str:
+        """
+        Пометить, какой слой дал ответ (для отладки генерации).
+        """
+
+        debug_logger.debug(f'Слой ответа: {layer}')
+        self._last_answer_layer = layer
+        return text
+
+
     def _route_request(self, user_input: str, context: list[str], lang: str) -> str:
         """
         Естественная генерация ответа с использованием знаний.
@@ -1439,120 +1910,170 @@ class Assistant:
 
         user_lower = user_input.lower().strip()
 
+        if any(p in user_lower for p in [
+            'пока', 'до свидания', 'мне пора', 'увидимся', 'до встречи',
+            'goodbye', 'bye',
+        ]):
+            debug_logger.debug('Прощание')
+            name = self._address_name()
+            if name:
+                return self._answer(f'__SHUTDOWN__До встречи, {name}!', 'farewell')
+            return self._answer('__SHUTDOWN__До встречи!', 'farewell')
+
+        if getattr(self, 'gen_only', False):
+            debug_logger.debug('Режим gen_only: только LSTM')
+            try:
+                generated = self._generate_with_lstm(user_input, context, lang)
+                if generated and len(generated.strip()) > 2:
+                    return self._answer(generated, 'lstm_forced')
+            except Exception as e:
+                error_logger.exception(f'gen_only: {e}')
+            return self._answer('(LSTM ничего внятного не сгенерировал)', 'lstm_empty')
+
         context_data = {
             'creator_name': self.creator_name or 'создатель',
             'user_name': self.current_speaker or 'ты',
-            'user_status': self.user_statuses.get(self.current_speaker,
-                                                  'пользователь') if self.current_speaker else 'пользователь',
+            'user_status': self.user_statuses.get(self.current_speaker, 'пользователь')
+            if self.current_speaker else 'пользователь',
             'conversation_count': self.conversation_count,
-            'lang': lang
+            'lang': lang,
         }
 
         # ------------------------------------------------------------------
         # 0. Жёсткие правила
         # ------------------------------------------------------------------
-
         is_who_is = re.search(r'кто\s+так(ой|ая|ое|ие)\s+\w+', user_lower) is not None
 
         if not is_who_is:
             ask_name = any(p in user_lower for p in [
                 'как тебя зовут', 'как тебя звать', 'твоё имя', 'твое имя',
-                'what is your name', 'your name'
+                'what is your name', 'your name',
             ])
             ask_who = any(p in user_lower for p in [
-                'кто ты', 'ты кто', 'представься', 'who are you'
+                'кто ты', 'ты кто', 'представься', 'who are you',
             ])
 
             if ask_name and ask_who:
                 debug_logger.debug('Вопрос "кто ты" + "как зовут"')
                 if lang == 'ru':
-                    return (
+                    return self._answer(
                         'Я Протос — искусственный интеллект. '
-                        'Меня зовут Протос. Я учусь понимать язык и помогать людям.'
+                        'Меня зовут Протос. Я учусь понимать язык и помогать людям.',
+                        'persona',
                     )
-                return "I'm Protos — an artificial intelligence. My name is Protos."
+                return self._answer(
+                    "I'm Protos — an artificial intelligence. My name is Protos.",
+                    'persona',
+                )
 
             if ask_name:
                 debug_logger.debug('Вопрос "как тебя зовут"')
                 if lang == 'ru':
-                    return 'Меня зовут Протос.'
-                return 'My name is Protos.'
+                    return self._answer('Меня зовут Протос.', 'persona')
+                return self._answer('My name is Protos.', 'persona')
 
             if ask_who:
                 debug_logger.debug('Вопрос о Протосе')
                 if lang == 'ru':
-                    return (
+                    return self._answer(
                         'Я Протос — искусственный интеллект. '
-                        'Я учусь понимать язык и помогать людям.'
+                        'Я учусь понимать язык и помогать людям.',
+                        'persona',
                     )
-                return (
+                return self._answer(
                     "I'm Protos — an artificial intelligence. "
-                    "I'm learning language and how to help people."
+                    "I'm learning language and how to help people.",
+                    'persona',
                 )
 
             if re.search(
                     r'(^|\s)(кто\s+я|как\s+меня\s+зовут|ты\s+знаешь\s+кто\s+я)(\s|$|[?!.])',
-                    user_lower
+                    user_lower,
             ):
                 debug_logger.debug('Вопрос "кто я"')
                 if self.current_speaker:
                     status = self.user_statuses.get(self.current_speaker, 'пользователь')
-                    if status == 'creator':
-                        return f'Ты — {self.current_speaker}, мой создатель.'
-                    return f'Ты — {self.current_speaker}.'
-                return 'Ты пока не представился. Напиши, как тебя зовут.'
+                    main = self.current_speaker
+                    call_as = self._address_name()
+                    if status == 'creator' or self._is_creator_name(self.current_speaker):
+                        if call_as and call_as.lower() != main.lower():
+                            return self._answer(
+                                f'Ты — {main}, мой создатель. '
+                                f'Сейчас я обращаюсь к тебе как {call_as}.',
+                                'identity',
+                            )
+                        return self._answer(f'Ты — {main}, мой создатель.', 'identity')
+                    if call_as and call_as.lower() != main.lower():
+                        return self._answer(
+                            f'Ты — {main}. Сейчас я зову тебя {call_as}.',
+                            'identity',
+                        )
+                    return self._answer(f'Ты — {main}.', 'identity')
+                return self._answer(
+                    'Ты пока не представился. Напиши, как тебя зовут.',
+                    'identity',
+                )
 
         if any(p in user_lower for p in ['кто создал', 'кто создатель', 'кто твой создатель']):
             debug_logger.debug('Вопрос о создателе')
             if self.creator_name:
-                return f'Мой создатель — {self.creator_name}.'
-            return 'Мой создатель ещё не представился мне.'
+                return self._answer(f'Мой создатель — {self.creator_name}.', 'identity')
+            return self._answer(
+                'Мой создатель ещё не представился мне.',
+                'identity',
+            )
 
         if any(p in user_lower for p in [
             'директива', 'твоя цель', 'твоя задача', 'зачем ты',
-            'твоё назначение', 'твое назначение'
+            'твоё назначение', 'твое назначение',
         ]):
             debug_logger.debug('Вопрос о цели/директиве')
             if lang == 'ru':
-                return (
+                return self._answer(
                     'Моя главная задача — учиться понимать язык, '
-                    'помнить важный контекст и помогать тебе.'
+                    'помнить важный контекст и помогать тебе.',
+                    'persona',
                 )
-            return 'My main goal is to learn language, keep useful context, and help you.'
+            return self._answer(
+                'My main goal is to learn language, keep useful context, and help you.',
+                'persona',
+            )
 
         if any(p in user_lower for p in [
-            'какие команды', 'список команд', 'что ты умеешь', 'твои команды'
+            'какие команды', 'список команд', 'что ты умеешь', 'твои команды',
         ]):
             debug_logger.debug('Запрос списка команд')
-            return self._help_text()
+            return self._answer(self._help_text(), 'help')
 
         if any(word in user_lower for word in [
             'привет', 'приветствую', 'здравствуй', 'здарова', 'добрый',
-            'hello', 'hi', 'пиривет', 'приветик'
+            'hello', 'hi', 'пиривет', 'приветик',
         ]):
             debug_logger.debug('Обнаружено приветствие')
-            return self._generate_natural_greeting(lang)
+            return self._answer(self._generate_natural_greeting(lang), 'greeting')
 
         if any(p in user_lower for p in [
             'пока', 'до свидания', 'мне пора', 'увидимся', 'до встречи',
             'goodbye', 'bye',
         ]):
             debug_logger.debug('Прощание')
-            if self.current_speaker:
-                return f'До встречи, {self.current_speaker}!'
-            return 'До встречи!'
+            name = self._address_name()
+            if name:
+                return self._answer(f'__SHUTDOWN__До встречи, {name}!', 'farewell')
+            return self._answer('__SHUTDOWN__До встречи!', 'farewell')
 
-        fact = self.find_fact(user_input)
+        fact = self.facts_store.find(user_input)
         if fact:
             debug_logger.debug(f'Найден факт: {fact[:50]}...')
-            return fact
+            return self._answer(fact, 'facts')
+
         # ------------------------------------------------------------------
         # 0.5 База Q&A
         # ------------------------------------------------------------------
         qa_answer = self.qa_matcher.find_answer(user_input)
         if qa_answer:
-            debug_logger.debug("Ответ найден в Q&A")
-            return qa_answer
+            debug_logger.debug('Ответ найден в Q&A')
+            return self._answer(qa_answer, 'qa')
 
         # ------------------------------------------------------------------
         # 1. Обученные диалоги
@@ -1560,7 +2081,7 @@ class Assistant:
         learned_response = self.dialogue_learner.get_response(user_input, context_data)
         if learned_response:
             debug_logger.debug('Найден ответ в обученных диалогах')
-            return learned_response
+            return self._answer(learned_response, 'dialogue_learner')
 
         # ------------------------------------------------------------------
         # 2. База знаний
@@ -1569,12 +2090,12 @@ class Assistant:
             knowledge = self.learning_manager.query_knowledge(user_input) if self.learning_manager else []
             if knowledge:
                 debug_logger.debug(f'Найдено знание: {knowledge[0][:50]}...')
-                return knowledge[0]
+                return self._answer(knowledge[0], 'learning_knowledge')
 
             knowledge_answer = self._query_knowledge_base(user_input)
             if knowledge_answer:
                 debug_logger.debug(f'Найдено в базе знаний: {knowledge_answer[:50]}...')
-                return knowledge_answer
+                return self._answer(knowledge_answer, 'knowledge_base')
 
         # ------------------------------------------------------------------
         # 3. Другой пользователь
@@ -1585,8 +2106,11 @@ class Assistant:
                 status = self.known_users[user].get('status', 'user')
                 relations = self._get_relationship_info(user)
                 if relations:
-                    return f'{user} — {status}. Связи: {relations}'
-                return f'{user} — {status}'
+                    return self._answer(
+                        f'{user} — {status}. Связи: {relations}',
+                        'rules',
+                    )
+                return self._answer(f'{user} — {status}', 'rules')
 
         # ------------------------------------------------------------------
         # 4. Статус
@@ -1595,8 +2119,11 @@ class Assistant:
             debug_logger.debug('Вопрос о статусе')
             if self.current_speaker and self.current_speaker in self.known_users:
                 status = self.known_users[self.current_speaker].get('status', 'user')
-                return f'Твой статус: {status}'
-            return 'У тебя пока нет статуса. Расскажи, кто ты?'
+                return self._answer(f'Твой статус: {status}', 'rules')
+            return self._answer(
+                'У тебя пока нет статуса. Расскажи, кто ты?',
+                'rules',
+            )
 
         # ------------------------------------------------------------------
         # 5. Связи
@@ -1608,28 +2135,37 @@ class Assistant:
                     if self.current_speaker and self.current_speaker in self.relationships:
                         rels = self.relationships[self.current_speaker]
                         if rel_type in rels:
-                            return f'Твой {rel_type} — {rels[rel_type]}.'
-                        return f'Я не знаю, кто твой {rel_type}. Расскажи мне.'
-                    return 'Я не знаю твоих связей. Расскажи мне о своей семье и друзьях.'
+                            return self._answer(
+                                f'Твой {rel_type} — {rels[rel_type]}.',
+                                'rules',
+                            )
+                        return self._answer(
+                            f'Я не знаю, кто твой {rel_type}. Расскажи мне.',
+                            'rules',
+                        )
+                    return self._answer(
+                        'Я не знаю твоих связей. Расскажи мне о своей семье и друзьях.',
+                        'rules',
+                    )
 
         # ------------------------------------------------------------------
         # 6. Системные команды текстом
         # ------------------------------------------------------------------
         if user_input.startswith('ls') or user_input.startswith('cd'):
             debug_logger.debug('Системная команда')
-            return self._handle_system_command(user_input)
+            return self._answer(self._handle_system_command(user_input), 'system')
 
         if user_lower in ['info', 'stats']:
             debug_logger.debug('Команда info/stats')
-            return self._handle_info_command()
+            return self._answer(self._handle_info_command(), 'system')
 
         if user_lower == 'clear':
             if self.user_role in ['owner', 'creator']:
                 self.memory.clear()
                 debug_logger.debug('Память очищена')
                 memory_logger.info('Память очищена')
-                return '🧹 Память очищена'
-            return 'У вас нет прав на очистку памяти'
+                return self._answer('🧹 Память очищена', 'system')
+            return self._answer('У вас нет прав на очистку памяти', 'system')
 
         # ------------------------------------------------------------------
         # 6.5 Незнакомое слово (редко)
@@ -1638,7 +2174,10 @@ class Assistant:
             unk = self._find_unknown_word(user_input)
             if unk and self.conversation_count % 5 == 0:
                 debug_logger.debug(f'Незнакомое слово: {unk}')
-                return self._make_teach_question('unknown_word', word=unk)
+                return self._answer(
+                    self._make_teach_question('unknown_word', word=unk),
+                    'teach',
+                )
 
         # ------------------------------------------------------------------
         # 7. LSTM
@@ -1646,9 +2185,9 @@ class Assistant:
         try:
             debug_logger.debug('Генерация через LSTM')
             generated = self._generate_with_lstm(user_input, context, lang)
-            if len(generated) > 5:
+            if generated and self._lstm_reply_ok(generated):
                 debug_logger.debug(f'LSTM сгенерировал: {generated[:30]}...')
-                return generated
+                return self._answer(generated, 'lstm')
         except Exception as e:
             error_logger.exception(f'Ошибка генерации: {e}')
             debug_logger.debug(f'Ошибка генерации: {e}')
@@ -1657,28 +2196,33 @@ class Assistant:
         # 8. Fallback
         # ------------------------------------------------------------------
         debug_logger.debug('Использован fallback ответ')
-        return self.dialogue_learner.get_fallback(lang)
+        return self._answer(self.dialogue_learner.get_fallback(lang), 'fallback')
+
 
     def _generate_natural_greeting(self, lang: str) -> str:
         """
         Естественное приветствие.
         """
+
         debug_logger.debug(f'Генерация приветствия на языке: {lang}')
 
         if self.current_speaker:
             status = self.user_statuses.get(self.current_speaker, 'пользователь')
+            name = self._address_name()
+
             if lang == 'ru':
                 if status == 'creator':
-                    return f"Снова привет, {self.current_speaker}! Рад тебя видеть, создатель."
-                return f"Привет, {self.current_speaker}!"
-            else:
-                if status == 'creator':
-                    return f"Hello again, {self.current_speaker}! Good to see you, creator."
-                return f"Hello, {self.current_speaker}!"
+                    return f'Снова привет, {name}! Рад тебя видеть, создатель.'
+                return f'Привет, {name}!'
+
+            if status == 'creator':
+                return f'Hello again, {name}! Good to see you, creator.'
+            return f'Hello, {name}!'
 
         if lang == 'ru':
-            return "Привет! Я Протос. Как тебя зовут?"
+            return 'Привет! Я Протос. Как тебя зовут?'
         return "Hello! I'm Protos. What's your name?"
+
 
     def _handle_command(self, command: str) -> str | None:
         """
@@ -1920,7 +2464,13 @@ class Assistant:
             self._save_creator_secret()
             return "Секретная фраза обновлена."
 
+        elif cmd == 'gen_only':
+            self.gen_only = not self.gen_only
+            state = 'включён' if self.gen_only else 'выключен'
+            return f'Режим только LSTM (gen_only): {state}'
+
         return None
+
 
     def _handle_system_command(self, command: str) -> str:
         """
@@ -1939,6 +2489,7 @@ class Assistant:
             return self.fs_manager.change_dir(path if path else None)
         return "Неизвестная команда"
 
+
     def _handle_info_command(self) -> str:
         """
         Информация о состоянии.
@@ -1954,6 +2505,7 @@ class Assistant:
             f"  Создатель: {self.creator_name or 'Не установлен'}\n"
             f"  Известно пользователей: {len(self.known_users)}"
         )
+
 
     @staticmethod
     def _match_nl_command(text: str) -> str | None:
@@ -1975,6 +2527,7 @@ class Assistant:
             if re.search(pattern, t):
                 return cmd
         return None
+
 
     def _help_text(self) -> str:
         """
@@ -2007,6 +2560,7 @@ class Assistant:
             '«какие команды», «задай вопрос», «давай поучимся».'
         )
 
+
     def _get_debug_info(self) -> str:
         """
         Отладочная информация для создателя.
@@ -2029,6 +2583,7 @@ class Assistant:
             f"  Связи: {self.relationships}\n"
             f"  Данных для обучения: {learning_data_count}"
         )
+
 
     def _query_knowledge_base(self, question: str) -> str | None:
         """
@@ -2058,6 +2613,7 @@ class Assistant:
         debug_logger.debug('Ничего не найдено в базе знаний')
         return None
 
+
     def _generate_with_lstm(self, user_input: str, context: list[str], lang: str) -> str:
         """
         Генерация ответа с помощью LSTM.
@@ -2065,26 +2621,31 @@ class Assistant:
 
         if self.learning_manager is None:
             debug_logger.debug('LearningManager не инициализирован')
-            return ""
+            return ''
 
-        if context:
-            prompt = f"{' '.join(context[-3:])} {user_input}"
-        else:
-            prompt = user_input
-
+        q = user_input.strip()
         if lang == 'ru':
-            prompt = f"Ответ на русском языке: {prompt}"
+            prompt = f'Вопрос: {q}\nОтвет:'
         else:
-            prompt = f"Answer in English: {prompt}"
+            prompt = f'Question: {q}\nAnswer:'
 
-        debug_logger.debug(f'Промпт для LSTM: {prompt[:50]}...')
-        generated = self.learning_manager.generate_sample(prompt, length=30)
+        debug_logger.debug(f'Промпт для LSTM: {prompt[:80]}...')
+        generated = self.learning_manager.generate_sample(prompt, length=40)
 
-        if generated.startswith(prompt):
-            generated = generated[len(prompt):]
+        text = generated.strip()
+        for stop in ('\nВопрос:', '\nQuestion:', '\nПользователь:'):
+            if stop in text:
+                text = text.split(stop, 1)[0].strip()
 
-        debug_logger.debug(f'Сгенерировано: {generated[:30]}...')
-        return generated.strip()
+        if '.' in text:
+            text = text.split('.', 1)[0].strip() + '.'
+        elif len(text) > 120:
+            text = text[:120].rsplit(' ', 1)[0] + '…'
+
+        debug_logger.debug(f'Сгенерировано: {text[:50]}...')
+        debug_logger.debug(f'LSTM raw: {generated!r}')
+        return text
+
 
     def _load_qa_pairs(self) -> None:
         """
@@ -2106,6 +2667,7 @@ class Assistant:
             error_logger.error(f'Ошибка загрузки Q&A: {e}')
             self.qa_pairs = []
 
+
     def _save_qa_pairs(self) -> None:
         """
         Сохранение пар вопрос-ответ.
@@ -2120,6 +2682,7 @@ class Assistant:
         except IOError as e:
             error_logger.error(f'Ошибка сохранения Q&A: {e}')
 
+
     @staticmethod
     def _normalize_question(text: str) -> str:
         """
@@ -2131,6 +2694,7 @@ class Assistant:
         t = re.sub(r'\s+', ' ', t)
         return t
 
+
     def _qa_similarity(self, a: str, b: str) -> float:
         """
         Простая похожесть: доля общих слов.
@@ -2141,108 +2705,6 @@ class Assistant:
         if not wa or not wb:
             return 0.0
         return len(wa & wb) / len(wa | wb)
-
-    def _load_facts(self) -> None:
-        """
-        Загрузка фактов.
-        """
-
-        path = 'data/facts.json'
-        self.facts: list[dict] = []
-        if not os.path.exists(path):
-            debug_logger.debug('Файл фактов не найден')
-            return
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            self.facts = data if isinstance(data, list) else []
-            debug_logger.debug(f'Загружено фактов: {len(self.facts)}')
-            assistant_logger.info(f'Загружено фактов: {len(self.facts)}')
-        except (json.JSONDecodeError, IOError) as e:
-            error_logger.error(f'Ошибка загрузки фактов: {e}')
-            self.facts = []
-
-    def _save_facts(self) -> None:
-        """
-        Сохранение фактов.
-        """
-
-        path = 'data/facts.json'
-        os.makedirs('data', exist_ok=True)
-        try:
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(self.facts, f, ensure_ascii=False, indent=2)
-            debug_logger.debug(f'Сохранено фактов: {len(self.facts)}')
-        except IOError as e:
-            error_logger.error(f'Ошибка сохранения фактов: {e}')
-
-    def add_fact(
-            self,
-            subject: str,
-            fact: str,
-            source: str = 'manual',
-            aliases: list[str] | None = None,
-    ) -> None:
-        """
-        Добавить или обновить факт.
-        """
-
-        sub = subject.strip().lower()
-        if not sub or not fact.strip():
-            return
-
-        for item in self.facts:
-            if item.get('subject', '').lower() == sub:
-                item['fact'] = fact.strip()
-                item['source'] = source
-                if aliases is not None:
-                    item['aliases'] = aliases
-                self._save_facts()
-                return
-
-        self.facts.append({
-            'subject': sub,
-            'aliases': aliases or [],
-            'fact': fact.strip(),
-            'source': source,
-        })
-        self._save_facts()
-
-    def find_fact(self, text: str) -> str | None:
-        """
-        Поиск факта по фразе пользователя.
-        """
-
-        if not getattr(self, 'facts', None):
-            return None
-
-        low = text.lower().strip()
-
-        m = re.search(
-            r'(?:кто\s+так(?:ой|ая|ое|ие)|что\s+так(?:ое|ая|ой)|что\s+значит|зачем\s+нужн\w*)\s+(.+?)(?:\?|$)',
-            low,
-        )
-        query = m.group(1).strip(' .!?…') if m else low
-        query = re.sub(r'^(такое|такой|такая|такoe)\s+', '', query).strip()
-
-        best = None
-        best_score = 0.0
-
-        for item in self.facts:
-            keys = [item.get('subject', '')] + list(item.get('aliases') or [])
-            for key in keys:
-                key = (key or '').lower().strip()
-                if not key:
-                    continue
-                if key == query:
-                    return item.get('fact')
-                if key in query or query in key:
-                    score = len(key) / max(len(query), 1)
-                    if score > best_score:
-                        best_score = score
-                        best = item.get('fact')
-
-        return best if best_score >= 0.3 else None
 
 
     def add_qa_pair(self, question: str, answer: str, source: str = 'manual') -> None:
@@ -2276,6 +2738,7 @@ class Assistant:
                 f'Вопрос: {question.strip()}\nОтвет: {answer.strip()}',
                 source=f'qa:{source}'
             )
+
 
     def toggle_learning(self) -> str:
         """

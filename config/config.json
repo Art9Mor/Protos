@@ -3,6 +3,6 @@
     "embedding_dim": 100,
     "vocab_size": 30000,
     "input_size": 10,
-    "hidden_size": 512,
+    "hidden_size": 256,
     "output_size": 10
 }
