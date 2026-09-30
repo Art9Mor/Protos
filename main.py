@@ -9,7 +9,6 @@ def load_config() -> dict:
     """
     Загрузка конфигурации.
     """
-
     config_path = 'config/config.json'
     debug_logger.debug(f'Загрузка конфигурации из {config_path}')
 
@@ -19,7 +18,7 @@ def load_config() -> dict:
         'vocab_size': 1000,
         'input_size': 10,
         'hidden_size': 64,
-        'output_size': 10
+        'output_size': 10,
     }
 
     if os.path.exists(config_path):
@@ -44,18 +43,24 @@ def load_config() -> dict:
 
     return default_config
 
+
 def read_user_line(prompt: str = '\n👤 Вы: ') -> tuple[str, bool]:
     """
     Чтение строки пользователя.
     """
 
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+
+    raw = b''
     try:
-        return input(prompt).strip(), False
-    except UnicodeDecodeError as e:
-        sys.stdout.write(prompt)
-        sys.stdout.flush()
         raw = sys.stdin.buffer.readline()
-        debug_logger.debug(f'Битые байты при вводе: {e}/{raw!r}')
+        if not raw:
+            return '', False
+        text = raw.decode('utf-8', errors='strict').rstrip('\r\n').strip()
+        return text, False
+    except UnicodeDecodeError as e:
+        debug_logger.debug(f'Битые байты при вводе: {e}; raw={raw!r}')
         text = raw.decode('utf-8', errors='replace').rstrip('\r\n').strip()
         return text, True
 
@@ -75,7 +80,7 @@ def main():
         print('=' * 50)
         print('🤖 Искин Протос')
         print('=' * 50)
-        print('Введите \'help\' для списка команд')
+        print("Введите 'help' для списка команд")
         print('=' * 50)
 
         debug_logger.debug('Создание ассистента')
@@ -84,16 +89,20 @@ def main():
 
         main_logger.info('Протос готов к работе')
 
+        if assistant.current_speaker or assistant.user_role == 'creator':
+            hello = assistant._generate_natural_greeting('ru')
+            print(f'🤖 {hello}')
+
         while True:
             try:
                 user_input, corrupted = read_user_line()
 
                 if not user_input:
+                    print('🤖 Напиши что-нибудь.')
                     continue
 
                 if corrupted:
                     print('⚠️ Часть сообщения повреждена при передаче, попробуй отправить его снова.')
-                    continue
 
                 if user_input.lower() in ['exit', 'quit', 'выход', 'стоп']:
                     debug_logger.debug('Получена команда выхода')
@@ -138,10 +147,18 @@ def main():
                     print(f'🤖 {response["response"]}')
 
                     if response.get('is_learning', False):
-                        print(f'   🧠 (Учусь... память: {response["memory_size"]} сообщений)')
+                        print(
+                            f'   🧠 (Учусь... память: {response["memory_size"]} сообщений)'
+                        )
+
+                    if response.get('shutdown'):
+                        debug_logger.debug('Выход по прощанию')
+                        main_logger.info('Завершение работы по прощанию')
+                        break
 
             except KeyboardInterrupt:
                 debug_logger.debug('Прерывание по Ctrl+C')
+                print('\n👋 До свидания!')
                 main_logger.info('Завершение работы по Ctrl+C')
                 break
             except Exception as e:

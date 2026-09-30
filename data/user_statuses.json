@@ -3,14 +3,27 @@
     "Артём": "creator"
   },
   "creator_name": "Артём",
+  "creator_aliases": [
+    "Артём",
+    "Артем",
+    "Deus",
+    "Лучезаар",
+    "Амшегар",
+    "Малефикус"
+  ],
   "owner_name": null,
+  "preferred_name": "Амшегар",
   "known_users": {
     "Артём": {
       "status": "creator",
-      "relations": {}
-    },
-    "Попросил": {
-      "status": "user",
+      "aliases": [
+        "Артём",
+        "Артем",
+        "Deus",
+        "Лучезаар",
+        "Амшегар",
+        "Малефикус"
+      ],
       "relations": {}
     }
   }

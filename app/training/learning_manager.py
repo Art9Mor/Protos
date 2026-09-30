@@ -14,6 +14,7 @@ class LearningManager:
     Менеджер обучения с пониманием.
     """
 
+
     def __init__(self, text_processor: TextProcessor, hidden_size: int = 128):
         self.text_processor = text_processor
         self.hidden_size = hidden_size
@@ -28,6 +29,7 @@ class LearningManager:
 
         self._load_learning_data()
         self._load_knowledge_base()
+
 
     def _load_learning_data(self) -> None:
         """
@@ -47,6 +49,7 @@ class LearningManager:
         else:
             training_logger.warning(f'Файл {data_path} не найден')
 
+
     def _save_learning_data(self) -> None:
         """
         Сохранение накопленных данных.
@@ -59,6 +62,7 @@ class LearningManager:
             training_logger.debug(f'Сохранено {len(self.learning_data)} примеров для обучения')
         except IOError as e:
             error_logger.error(f'Ошибка сохранения данных: {e}')
+
 
     def _load_knowledge_base(self) -> None:
         """
@@ -80,6 +84,7 @@ class LearningManager:
         else:
             training_logger.warning(f'Файл {kb_path} не найден')
 
+
     def _save_knowledge_base(self) -> None:
         """
         Сохранение базы знаний.
@@ -97,18 +102,41 @@ class LearningManager:
         except IOError as e:
             error_logger.error(f'Ошибка сохранения базы знаний: {e}')
 
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        """
+        Нормализация для сравнения дубликатов.
+        """
+        return ' '.join((text or '').strip().lower().split())
+
+
     def learn_from_text(self, text: str, source: str = 'manual') -> None:
         """
-        Добавление текста для обучения.
+        Добавление текста для обучения (без точных дубликатов).
         """
+        text = (text or '').strip()
+        if not text:
+            return
+
+        norm = self._normalize_text(text)
+        for item in self.learning_data:
+            if self._normalize_text(item.get('text', '')) == norm:
+                training_logger.debug(
+                    f'Пропуск дубликата learning_data ({len(text)} символов, source={source})'
+                )
+                return
 
         self.learning_data.append({
             'text': text,
             'source': source,
-            'timestamp': time.time()
+            'timestamp': time.time(),
         })
         self._save_learning_data()
-        training_logger.info(f'Добавлен текст для обучения ({len(text)} символов) из источника: {source}')
+        training_logger.info(
+            f'Добавлен текст для обучения ({len(text)} символов) из источника: {source}'
+        )
+
 
     def learn_from_conversation(self, user_message: str, response: str) -> None:
         """
@@ -117,6 +145,7 @@ class LearningManager:
 
         training_text = f'Пользователь: {user_message}\nПротос: {response}'
         self.learn_from_text(training_text, source='conversation')
+
 
     def learn_from_file(self, filepath: str) -> str:
         """
@@ -131,17 +160,15 @@ class LearningManager:
             with open(filepath, 'r', encoding='utf-8') as f:
                 text = f.read()
 
-            self.learning_data.append({
-                'text': text,
-                'source': f'file:{os.path.basename(filepath)}',
-                'timestamp': time.time()
-            })
-            self._save_learning_data()
-            training_logger.info(f'Загружен файл: {os.path.basename(filepath)} ({len(text)} символов)')
+            self.learn_from_text(text, source=f'file:{os.path.basename(filepath)}')
+            training_logger.info(
+                f'Загружен файл: {os.path.basename(filepath)} ({len(text)} символов)'
+            )
             return f'📚 Загружен файл: {os.path.basename(filepath)} ({len(text)} символов)'
         except Exception as e:
             error_logger.exception(f'Ошибка чтения файла: {e}')
             return f'❌ Ошибка чтения файла: {e}'
+
 
     def train(self, epochs: int = 10, sequence_length: int = 100, learning_rate: float = 0.01) -> None:
         """
@@ -216,6 +243,7 @@ class LearningManager:
             error_logger.exception(f'Критическая ошибка при обучении: {e}')
             raise
 
+
     def _prepare_training_data(self, text: str, sequence_length: int = 100) -> list:
         """
         Подготовка данных для обучения.
@@ -287,55 +315,96 @@ class LearningManager:
         training_logger.info(f'Подготовлено {len(sequences)} последовательностей')
         return sequences
 
-    def generate_sample(self, start_text: str = '', length: int = 100) -> str:
+
+    def generate_sample(self,
+                        start_text: str = '',
+                        length: int = 40,
+                        temperature: float = 0.8) -> str:
         """
-        Генерация текста после обучения.
+        Генерация продолжения: сначала прогон промпта, потом сэмплинг.
         """
 
-        training_logger.debug(f'Генерация текста: start_text=\'{start_text[:30]}...\', length={length}')
+        training_logger.debug(
+            f'Генерация текста: start_text={start_text[:40]!r}, length={length}'
+        )
 
         try:
-            if start_text:
-                start_vec = self.text_processor.vectorize(start_text)
-            else:
-                start_idx = self.text_processor.word_to_idx.get('<START>', 0)
-                start_vec = self.text_processor.embeddings[start_idx]
-
             self.lstm.h = np.zeros(self.lstm.hidden_size)
             self.lstm.c = np.zeros(self.lstm.hidden_size)
 
-            generated_tokens = []
-            x = start_vec
+            unk = self.text_processor.word_to_idx.get('<UNK>', 1)
+            end_id = self.text_processor.word_to_idx.get('<END>', 3)
+
+
+            def token_to_idx(tok: str) -> int:
+                return self.text_processor.word_to_idx.get(
+                    tok.lower(),
+                    self.text_processor.word_to_idx.get(tok, unk),
+                )
+
+
+            parts: list[str] = []
+
+            if start_text:
+                raw = start_text.replace('\n', ' \n ')
+                parts = [p for p in raw.split() if p]
+                for part in parts:
+                    idx = token_to_idx(part)
+                    x = self.text_processor.embeddings[idx]
+                    if np.ndim(x) == 0:
+                        x = np.array([x])
+                    self.lstm.forward(np.array([x]))
+
+            generated_tokens: list[str] = []
+
+            if parts:
+                last_idx = token_to_idx(parts[-1])
+            else:
+                last_idx = self.text_processor.word_to_idx.get('<START>', 2)
+
+            x = self.text_processor.embeddings[last_idx]
 
             for _ in range(length):
-                if x.ndim == 0:
+                if np.ndim(x) == 0:
                     x = np.array([x])
 
                 outputs = self.lstm.forward(np.array([x]))
-
-                if len(outputs) > 0:
-                    probs = self.lstm.softmax(outputs[0])
-                    token_idx = np.random.choice(range(len(probs)), p=probs)
-
-                    if token_idx == self.text_processor.word_to_idx.get('<END>', 3):
-                        break
-
-                    token = self.text_processor.idx_to_word.get(token_idx, '<UNK>')
-                    generated_tokens.append(token)
-                    x = self.text_processor.embeddings[token_idx]
-                else:
+                if not len(outputs):
                     break
+
+                logits = np.nan_to_num(outputs[0], nan=0.0, posinf=50.0, neginf=-50.0)
+
+                t = max(float(temperature), 1e-6)
+                logits = logits / t
+                probs = self.lstm.softmax(logits)
+                probs = np.clip(probs, 1e-12, None)
+                probs = probs / probs.sum()
+
+                token_idx = int(np.random.choice(len(probs), p=probs))
+
+                if token_idx == end_id:
+                    break
+
+                token = self.text_processor.idx_to_word.get(token_idx, '<UNK>')
+                if token in ('<PAD>', '<START>', '<END>'):
+                    continue
+
+                generated_tokens.append(token)
+                x = self.text_processor.embeddings[token_idx]
 
             text = ' '.join(generated_tokens)
             for punct in ['.', ',', '!', '?', ';', ':']:
                 text = text.replace(f' {punct}', punct)
 
-            training_logger.debug(f'Сгенерировано {len(generated_tokens)} токенов')
+            training_logger.debug(
+                f'Сгенерировано токенов: {len(generated_tokens)}, text={text[:60]!r}'
+            )
             return text
 
         except Exception as e:
             error_logger.exception(f'Ошибка генерации текста: {e}')
             return ''
+
 
     def save_model(self, filepath: str) -> None:
         """
@@ -380,6 +449,7 @@ class LearningManager:
         except IOError as e:
             error_logger.error(f'Ошибка сохранения модели: {e}')
             raise
+
 
     def load_model(self, filepath: str) -> None:
         """
@@ -432,6 +502,7 @@ class LearningManager:
             error_logger.error(f'Ошибка загрузки модели: {e}')
             raise
 
+
     def query_knowledge(self, question: str) -> list[str]:
         """
         Поиск знаний по вопросу.
@@ -456,6 +527,7 @@ class LearningManager:
 
         training_logger.debug(f'Найдено {len(results)} результатов')
         return results[:5]
+
 
     def learn_from_book_with_understanding(self, book_path: str) -> str:
         """
@@ -485,6 +557,7 @@ class LearningManager:
         training_logger.success(f'Обработана книга. Извлечено {len(knowledge["facts"])} фактов.')
         return f'✅ Обработана книга. Извлечено {len(knowledge["facts"])} фактов.'
 
+
     def _add_knowledge(self, knowledge: str, source: str) -> None:
         """
         Добавление знания в базу.
@@ -503,6 +576,7 @@ class LearningManager:
                 training_logger.debug(f'Обновлено знание: {knowledge[:50]}...')
 
         self._save_knowledge_base()
+
 
     def _connect_knowledge(self) -> None:
         """

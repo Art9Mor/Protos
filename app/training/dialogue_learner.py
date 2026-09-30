@@ -104,16 +104,20 @@ class DialogueLearner:
         """
         Проверка совпадения с паттерном.
         """
-        full = pattern.get('full_text', '')
-        if full and full in user_input:
-            return True
+
+        full = pattern.get('full_text', '').strip()
+        if full and (full == user_input or full in user_input):
+            if full == user_input:
+                return True
+            if len(full) >= 8 and full in user_input:
+                return True
 
         keywords = pattern.get('keywords', [])
-        if not keywords:
+        if len(keywords) < 2:
             return False
 
         matched = sum(1 for word in keywords if word in user_input)
-        threshold = max(1, len(keywords) // 2)
+        threshold = max(2, (len(keywords) * 2 + 2) // 3)
         return matched >= threshold
 
     @staticmethod
