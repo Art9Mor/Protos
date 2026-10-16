@@ -2,9 +2,11 @@ import json
 import os
 import re
 import time
+
 from pathlib import Path
 
 from scripts.train_on_books import train_protos_on_books, continue_training_from_saved, BookDownloader
+from ..auth.service import AuthService
 from ..cognition.thought_processor import ThoughtProcessor
 from ..dialogue.qa_matcher import QAMatcher
 from ..knowledge.facts import FactsStore
@@ -116,8 +118,13 @@ class Assistant:
 
         self.config = config
 
+        # Сессия (AuthService создаём после загрузки known_users)
+        self.session_authenticated = False
+        self.pending_login: dict | None = None
+        self.auth: AuthService | None = None
+
         # Система ролей
-        self.user_role: str = "user"
+        self.user_role: str = 'user'
         self.creator_name: str | None = None
         self.owner_name: str | None = None
 
@@ -140,8 +147,8 @@ class Assistant:
 
         # Секрет создателя
         self.pending_auth = False
-        self.creator_secret = "Свет лишь слепит глаза"
-        self.creator_secret_hint = "Только во Тьме настанет прозрение"
+        self.creator_secret = 'Свет лишь слепит глаза'
+        self.creator_secret_hint = 'Только во Тьме настанет прозрение'
 
         self._load_creator_secret()
 
@@ -149,7 +156,6 @@ class Assistant:
         self.waiting_for_status = False
         self.pending_user_name = None
         self.current_speaker = None
-        self.session_authenticated = False
         self.user_name = None
         self.conversation_count = 0
 
@@ -169,11 +175,15 @@ class Assistant:
         # Q&A
         self.qa_pairs: list[dict] = []
 
-        # Загрузка данных
+        # Загрузка данных (statuses, known_users, модель)
         self._load_data()
 
-        debug_logger.debug("Инициализация Assistant завершена")
-        main_logger.success("Ассистент инициализирован")
+        # Auth только после known_users / creator_name
+        self.auth = AuthService(self)
+        self.auth.restore_session()
+
+        debug_logger.debug('Инициализация Assistant завершена')
+        main_logger.success('Ассистент инициализирован')
 
 
     def _init_cognition(self) -> None:
@@ -316,7 +326,7 @@ class Assistant:
                 self.learning_manager.load_model(model_path)
                 assistant_logger.success('Модель загружена')
                 debug_logger.debug('Модель успешно загружена')
-                return  # ← важное: не идём в базовое обучение
+                return
             except Exception as e:
                 error_logger.exception(f'Ошибка загрузки модели: {e}')
                 debug_logger.debug('Ошибка загрузки модели, начинаю обучение с нуля')
@@ -326,6 +336,14 @@ class Assistant:
             assistant_logger.warning('Модель не найдена, создаю новую')
 
         self._train_on_basic_examples()
+
+
+    def is_logged_in(self) -> bool:
+        """
+        Есть активная сессия (имя + подтверждение).
+        """
+
+        return bool(self.current_speaker) and bool(self.session_authenticated)
 
 
     def _load_user_statuses(self) -> None:
@@ -349,16 +367,23 @@ class Assistant:
                     self.preferred_name = data.get('preferred_name') or self.creator_name
                     self.creator_aliases = data.get('creator_aliases') or []
 
+                self.session_authenticated = False
+                self.user_role = 'user'
+                self.current_speaker = None
+                self.user_name = None
+
                 if self.creator_name:
-                    self.current_speaker = self.creator_name
-                    self.user_name = self.creator_name
-                    self.user_role = 'creator'
-                    debug_logger.debug(f'Восстановлен создатель: {self.creator_name}')
+                    debug_logger.debug(
+                        f'На диске есть создатель: {self.creator_name}, '
+                        f'сессия не подтверждена (нужна секретная фраза)'
+                    )
+                    assistant_logger.info(
+                        f'Создатель известен ({self.creator_name}), ожидание подтверждения сессии'
+                    )
                 elif self.known_users:
-                    first_user = next(iter(self.known_users))
-                    self.current_speaker = first_user
-                    self.user_name = first_user
-                    debug_logger.debug(f'Восстановлен пользователь: {first_user}')
+                    debug_logger.debug(
+                        f'Известные пользователи: {len(self.known_users)}, сессия гостевая'
+                    )
 
                 debug_logger.debug(f'Загружено {len(self.user_statuses)} статусов')
                 assistant_logger.info(f'Загружено {len(self.user_statuses)} статусов')
@@ -405,19 +430,6 @@ class Assistant:
             error_logger.error(f'Ошибка сохранения секрета: {e}')
 
 
-    def _check_secret_phrase(self, text: str) -> bool:
-        """
-        Проверка секретной фразы.
-        """
-
-        normalized = text.lower().strip()
-        for prefix in ['код:', 'код доступа:', 'фраза:', 'секрет:', 'пароль:']:
-            if normalized.startswith(prefix):
-                normalized = normalized[len(prefix):].strip()
-        normalized = normalized.rstrip('.,!?;:…')
-        return normalized == self.creator_secret
-
-
     def _creator_names(self) -> set[str]:
         """
         Все имена создателя (канон + алиасы), в нижнем регистре.
@@ -450,11 +462,19 @@ class Assistant:
 
 
     def _address_name(self) -> str:
-        return (
-                self.preferred_name
-                or self.current_speaker
-                or self._canonical_creator_name()
-        )
+        """
+        Обращение к текущему собеседнику.
+        """
+
+        name = self.current_speaker or self.user_name
+        if not name:
+            return self._canonical_creator_name()
+
+        if self.user_role == 'creator' or self._is_creator_name(name):
+            return self.preferred_name or name
+
+        rec = self.known_users.get(name) or {}
+        return rec.get('preferred_name') or name
 
 
     def _handle_add_creator_alias(self, text: str, lang: str) -> str | None:
@@ -504,6 +524,7 @@ class Assistant:
         """
         Ответ на вопрос про новое имя.
         """
+
         if not self.pending_rename:
             return None
 
@@ -591,6 +612,7 @@ class Assistant:
         """
         Если имя — алиас создателя, вернуть каноническое имя создателя.
         """
+
         if self._is_creator_name(name):
             return self._canonical_creator_name()
         return name
@@ -805,23 +827,6 @@ class Assistant:
         return any(p in low for p in rejects)
 
 
-    def _request_auth(self, lang: str) -> str:
-        """
-        Запрос секретной фразы.
-        """
-
-        self.pending_auth = True
-        if lang == 'ru':
-            return (
-                f"Чтобы подтвердить, что ты создатель, назови секретную фразу.\n"
-                f"Подсказка: {self.creator_secret_hint}"
-            )
-        return (
-            f"To confirm you are the creator, say the secret phrase.\n"
-            f"Hint: {self.creator_secret_hint}"
-        )
-
-
     def _save_user_statuses(self) -> None:
         """
         Сохранение статусов пользователей.
@@ -1034,15 +1039,14 @@ class Assistant:
 
             # 3. Ожидаем секретную фразу
             if getattr(self, 'pending_auth', False):
-                if self._check_secret_phrase(user_input):
-                    self.pending_auth = False
-                    name = self.current_speaker or self.user_name or 'Создатель'
+                if self.auth.check_secret_phrase(user_input):
+                    name = self.current_speaker or self.user_name or self.creator_name or 'Создатель'
+                    if self._is_creator_name(name) or name == self.creator_name:
+                        name = self._canonical_creator_name()
                     self._apply_status(name, 'creator')
-                    self.current_speaker = name
-                    self.user_name = name
-                    self.user_role = 'creator'
-                    self._save_user_statuses()
-                    response = f'Фраза верная. Привет, {name}! Полный доступ открыт.'
+                    self.auth.open_session(name, 'creator')
+                    assistant_logger.info(f'Сессия создателя открыта: {name}')
+                    response = f'Фраза верная. Приветствую, {name}! Полный доступ открыт.'
                     dialog_logger.info(f'🤖 {response}')
                     return {
                         'response': response,
@@ -1050,11 +1054,11 @@ class Assistant:
                         'memory_size': len(self.memory),
                         'is_learning': self.is_learning,
                         'user_role': self.user_role,
-                        'current_user': self.current_speaker
+                        'current_user': self.current_speaker,
                     }
                 else:
                     self.pending_auth = False
-                    response = 'Фраза неверная. Доступ создателя не подтверждён.'
+                    response = 'Фраза неверная. Доступ не подтверждён.'
                     dialog_logger.info(f'🤖 {response}')
                     return {
                         'response': response,
@@ -1090,6 +1094,69 @@ class Assistant:
                     'is_learning': self.is_learning,
                     'user_role': self.user_role,
                     'current_user': self.current_speaker,
+                }
+
+            # 3.3 Выход из сессии (не закрытие программы)
+            low = user_input.lower().strip()
+            low = re.sub(r'[.!?…]+$', '', low).strip()
+            if low in (
+                    'логаут',
+                    'разлогин',
+                    'разлогиниться',
+                    'выйти из учётки',
+                    'выйти из учетки',
+                    'смени пользователя',
+                    'это не я',
+                    'logout',
+                    'log out',
+            ):
+                response = self.auth.logout(lang)
+                tail = self.auth.start_login_flow(lang)
+                full = f'{response}\n{tail}'
+                dialog_logger.info(f'🤖 {full}')
+                return {
+                    'response': full,
+                    'language': lang,
+                    'memory_size': len(self.memory),
+                    'is_learning': self.is_learning,
+                    'user_role': self.user_role,
+                    'current_user': self.current_speaker,
+                }
+
+            # 3.4 Шаги входа (имя → статус → пароль / регистрация)
+            if self.pending_login is not None:
+                response = self.auth.handle_login_step(user_input, lang)
+                shutdown = isinstance(response, str) and response.startswith('__SHUTDOWN__')
+                if shutdown:
+                    response = response[len('__SHUTDOWN__'):]
+                dialog_logger.info(f'🤖 {response}')
+                return {
+                    'response': response,
+                    'language': lang,
+                    'memory_size': len(self.memory),
+                    'is_learning': self.is_learning,
+                    'user_role': self.user_role,
+                    'current_user': self.current_speaker,
+                    'shutdown': shutdown,
+                }
+
+            # 3.5 Ещё не вошли — не пускаем в обычный диалог
+            if not self.is_logged_in():
+                if self.pending_login is None:
+                    self.pending_login = {'step': 'ask_name'}
+                response = self.auth.handle_login_step(user_input, lang)
+                shutdown = isinstance(response, str) and response.startswith('__SHUTDOWN__')
+                if shutdown:
+                    response = response[len('__SHUTDOWN__'):]
+                dialog_logger.info(f'🤖 {response}')
+                return {
+                    'response': response,
+                    'language': lang,
+                    'memory_size': len(self.memory),
+                    'is_learning': self.is_learning,
+                    'user_role': self.user_role,
+                    'current_user': self.current_speaker,
+                    'shutdown': shutdown,
                 }
 
             # 4. Ответ на учебный вопрос Протоса
@@ -1633,7 +1700,7 @@ class Assistant:
         if status == 'creator' and self.user_role != 'creator':
             self.creator_name = self._canonical_creator_name()
             self._save_user_statuses()
-            return self._request_auth(lang)
+            return self.auth.request_auth(lang)
 
         if status:
             self._apply_status(name, status)
@@ -2442,21 +2509,20 @@ class Assistant:
         elif cmd == 'auth':
             phrase = ' '.join(cmd_parts[1:]) if len(cmd_parts) > 1 else ''
             if not phrase:
-                return self._request_auth('ru')
-            if self._check_secret_phrase(phrase):
+                return self.auth.request_auth('ru')
+            if self.auth.check_secret_phrase(phrase):
                 name = self.current_speaker or self.user_name or self.creator_name or 'Создатель'
+                if self._is_creator_name(name) or name == self.creator_name:
+                    name = self._canonical_creator_name()
                 self._apply_status(name, 'creator')
-                self.current_speaker = name
-                self.user_name = name
-                self.user_role = 'creator'
-                self.pending_auth = False
-                self._save_user_statuses()
-                return f"Фраза верная. Привет, {name}! Полный доступ открыт."
-            return "Фраза неверная."
+                self.auth.open_session(name, 'creator')
+                assistant_logger.info(f'Сессия создателя открыта: {name}')
+                return f'Фраза верная. Привет, {name}! Доступ разрешён.'
+            return 'Фраза неверная. Доступ запрещён.'
 
         elif cmd == 'set_secret':
             if self.user_role != 'creator':
-                return "Только создатель может менять секретную фразу."
+                return "Доступ запрещён."
             if len(cmd_parts) < 2:
                 return "Использование: /set_secret <новая фраза>"
             new_secret = ' '.join(cmd_parts[1:]).lower().strip()
@@ -2467,7 +2533,7 @@ class Assistant:
         elif cmd == 'gen_only':
             self.gen_only = not self.gen_only
             state = 'включён' if self.gen_only else 'выключен'
-            return f'Режим только LSTM (gen_only): {state}'
+            return f'Активирован режим исключительной генерации: {state}'
 
         return None
 

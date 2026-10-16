@@ -1,6 +1,7 @@
 {
   "statuses": {
-    "Артём": "creator"
+    "Артём": "creator",
+    "Тестер": "user"
   },
   "creator_name": "Артём",
   "creator_aliases": [
@@ -25,6 +26,15 @@
         "Малефикус"
       ],
       "relations": {}
+    },
+    "Тестер": {
+      "id": "ef2e8f39",
+      "status": "user",
+      "relations": {},
+      "salt": "eb87349dea8cfab5d48468d14b29f23c",
+      "password_hash": "4cfbba2ed3afa76ca4f3499af0fd4008431959ac74bbca7bef3f353b27e38a74",
+      "aliases": [],
+      "preferred_name": null
     }
   }
 }
