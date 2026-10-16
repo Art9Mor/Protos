@@ -89,9 +89,12 @@ def main():
 
         main_logger.info('Протос готов к работе')
 
-        if assistant.current_speaker or assistant.user_role == 'creator':
+        if assistant.is_logged_in():
             hello = assistant._generate_natural_greeting('ru')
             print(f'🤖 {hello}')
+        else:
+            print('🤖 Привет! Я Протос.')
+            print(f'🤖 {assistant.auth.start_login_flow("ru")}')
 
         while True:
             try:
@@ -103,6 +106,7 @@ def main():
 
                 if corrupted:
                     print('⚠️ Часть сообщения повреждена при передаче, попробуй отправить его снова.')
+                    continue
 
                 if user_input.lower() in ['exit', 'quit', 'выход', 'стоп']:
                     debug_logger.debug('Получена команда выхода')
