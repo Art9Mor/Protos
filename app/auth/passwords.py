@@ -78,7 +78,7 @@ class PasswordAuth:
         self.auth.open_session(key, rec.get('status', status))
         a.pending_login = None
         assistant_logger.info(f'Вход выполнен: {key} ({a.user_role})')
-        address = a._address_name() if hasattr(a, '_address_name') else key
+        address = a.address_name() if hasattr(a, 'address_name') else key
         return f'Вход выполнен. Привет, {address}!'
 
 
@@ -109,3 +109,29 @@ class PasswordAuth:
             f'Готово, {name}. Ты зарегистрирован как пользователь. '
             f'Можем общаться.'
         )
+
+
+    def register_owner(self, name: str, password: str, lang: str = 'ru') -> str:
+        """
+        Регистрация owner (без авто-логина под ним).
+        """
+
+        a = self.a
+        salt, ph = self.hash_password(password)
+        uid = str(uuid.uuid4())[:8]
+        a.known_users[name] = {
+            'id': uid,
+            'status': 'owner',
+            'relations': {},
+            'salt': salt,
+            'password_hash': ph,
+            'aliases': [],
+            'preferred_name': None,
+            'logged_in': False,
+        }
+        a.user_statuses[name] = 'owner'
+        a.owner_name = name
+        a.save_user_statuses()
+        a.pending_login = None
+        assistant_logger.info(f'Зарегистрирован owner: {name}')
+        return f'Владелец «{name}» зарегистрирован. Пароль задан.'

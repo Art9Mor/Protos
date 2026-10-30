@@ -46,7 +46,10 @@ class LoginFlow:
         info = a.pending_login or {}
         step = info.get('step', 'ask_name')
 
-        debug_logger.debug(f'Login step={step}, input={text[:40]!r}')
+        if step in ('ask_password', 'register_password', 'register_password2'):
+            debug_logger.debug(f'Login step={step}, input=***')
+        else:
+            debug_logger.debug(f'Login step={step}, input={text[:40]!r}')
 
         farewell = {
             'пока', 'до свидания', 'мне пора', 'увидимся', 'до встречи',
@@ -59,9 +62,47 @@ class LoginFlow:
                 a.pending_login = None
                 return '__SHUTDOWN__До встречи!'
 
+            if low_full in ('отмена', 'cancel', 'назад'):
+                return 'Сейчас нужно имя. Назовите имя или введите «конец сеанса».'
+
+            if (
+                    low_full in ('создатель', 'creator')
+                    or re.search(r'(^|\s)(я\s+)?(твой\s+)?создател', low_full)
+                    or low_full in ('i am the creator', 'i am creator')
+            ):
+                creator = a.creator_name or (
+                    a.canonical_creator_name()
+                    if hasattr(a, 'canonical_creator_name')
+                    else None
+                )
+                if not creator:
+                    return (
+                        'Создатель в системе ещё не задан. '
+                        'Назовите имя, затем укажите статус «создатель».'
+                    )
+                a.pending_login = None
+                a.pending_auth = True
+                a.current_speaker = creator
+                a.user_name = creator
+                assistant_logger.info(
+                    f'Login: заявка создателя → секрет ({creator})'
+                )
+                return self.auth.request_auth(lang)
+
+            blocked = {
+                'новая сессия', 'новый сеанс', 'войти', 'вход', 'логин',
+                'login', 'new session', 'session', 'сессия',
+            }
+            if low_full in blocked or low_full.startswith('новая сесс'):
+                return (
+                    'Это не имя. Назовите имя или псевдоним '
+                    '(или введите «конец сеанса»).'
+                )
+
             name = text.strip().strip('.!')
             if len(name) < 2:
                 return 'Назовите Ваше имя.'
+
             name = name[0].upper() + name[1:] if name else name
             a.pending_login = {'step': 'ask_status', 'name': name}
             assistant_logger.info(f'Login: имя={name}')
@@ -73,6 +114,10 @@ class LoginFlow:
             if low_full in farewell:
                 a.pending_login = None
                 return '__SHUTDOWN__До встречи!'
+
+            if low_full in ('отмена', 'cancel', 'назад'):
+                a.pending_login = {'step': 'ask_name'}
+                return 'Инициирована отмена. Снова назовите имя или введите «конец сеанса».'
 
             if any(w in low for w in ('создатель', 'creator')):
                 status = 'creator'
@@ -122,6 +167,27 @@ class LoginFlow:
                 }
                 return 'Пароли не совпали. Придумайте пароль снова.'
             return self.auth.register_user(name, text, lang)
+
+        if step == 'register_owner_password':
+            if len(text) < 4:
+                return 'Пароль слишком короткий (минимум 4 символа).'
+            a.pending_login = {
+                'step': 'register_owner_password2',
+                'name': name,
+                'status': 'owner',
+                'password_once': text,
+            }
+            return 'Повторите пароль владельца ещё раз.'
+
+        if step == 'register_owner_password2':
+            if text != info.get('password_once'):
+                a.pending_login = {
+                    'step': 'register_owner_password',
+                    'name': name,
+                    'status': 'owner',
+                }
+                return 'Пароли не совпали. Придумайте пароль снова.'
+            return self.auth.register_owner(name, text, lang)
 
         if step == 'register_confirm':
             if any(w in low for w in ('да', 'yes', 'ага', 'регистрируй')):

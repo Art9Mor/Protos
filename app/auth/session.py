@@ -53,7 +53,7 @@ class SessionManager:
 
         if name and name not in a.known_users:
             status = a.user_statuses.get(name, 'user')
-            if name == a.creator_name or a._is_creator_name(name):
+            if name == a.creator_name or a.is_creator_name(name):
                 status = 'creator'
             a.known_users[name] = {
                 'status': status,
@@ -62,7 +62,7 @@ class SessionManager:
                 'logged_in': True,
             }
 
-        a._save_user_statuses()
+        a.save_user_statuses()
         debug_logger.debug(f'logged_in → {name!r}')
 
 
@@ -90,8 +90,8 @@ class SessionManager:
         rec = a.known_users.get(name) or {}
         role = rec.get('status') or a.user_statuses.get(name) or 'user'
 
-        if role == 'creator' or a._is_creator_name(name):
-            name = a._canonical_creator_name()
+        if role == 'creator' or a.is_creator_name(name):
+            name = a.canonical_creator_name()
             role = 'creator'
 
         a.current_speaker = name
@@ -107,7 +107,7 @@ class SessionManager:
 
     def logout(self, lang: str = 'ru') -> str:
         """
-        Сброс текущей сессии (учётки с диска не удаляет).
+        Сброс текущей сессии.
         """
 
         a = self.a
@@ -126,11 +126,5 @@ class SessionManager:
         self.set_logged_in(None)
 
         if lang == 'ru':
-            return (
-                'Сессия была завершена. '
-                'Инициализируйте новую сессию, чтобы продолжить.'
-            )
-        return (
-            'The session has been completed. '
-            'Initialize a new session to continue.'
-        )
+            return 'Сессия завершена.'
+        return 'Session ended.'

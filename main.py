@@ -1,3 +1,4 @@
+import getpass
 import json
 import os
 import sys
@@ -44,14 +45,32 @@ def load_config() -> dict:
     return default_config
 
 
-def read_user_line(prompt: str = '\n👤 Вы: ') -> tuple[str, bool]:
+def read_user_line(prompt: str = '\n👤 Вы: ', secret: bool = False) -> tuple[str, bool]:
     """
-    Чтение строки пользователя.
+    Чтение строки. secret=True — пароль без отображения (getpass).
+    Второе значение: True, если строку пришлось чинить после битых байт.
     """
+    if secret:
+        try:
+            text = getpass.getpass(prompt='👤 Пароль (не отображается): ')
+            return (text or '').strip(), False
+        except (EOFError, KeyboardInterrupt):
+            raise
+        except Exception as e:
+            debug_logger.debug(f'getpass failed: {e}, fallback input')
+            # в некоторых IDE getpass ломается — тогда обычный ввод
+            text = input('👤 Пароль: ')
+            return (text or '').strip(), False
+
+    try:
+        return input(prompt).strip(), False
+    except UnicodeDecodeError as e:
+        debug_logger.debug(f'UnicodeDecodeError на input: {e}')
+    except (EOFError, KeyboardInterrupt):
+        raise
 
     sys.stdout.write(prompt)
     sys.stdout.flush()
-
     raw = b''
     try:
         raw = sys.stdin.buffer.readline()
@@ -63,6 +82,24 @@ def read_user_line(prompt: str = '\n👤 Вы: ') -> tuple[str, bool]:
         debug_logger.debug(f'Битые байты при вводе: {e}; raw={raw!r}')
         text = raw.decode('utf-8', errors='replace').rstrip('\r\n').strip()
         return text, True
+
+
+def show_bot_response(response: dict) -> bool:
+    """
+    Печать ответа. Возвращает True, если нужно завершить программу.
+    """
+
+    text = (response.get('response') or '').strip()
+    shutdown = bool(response.get('shutdown'))
+    if text.startswith('__SHUTDOWN__'):
+        text = text[len('__SHUTDOWN__'):].lstrip()
+        shutdown = True
+    print(f'🤖 {text}')
+    if response.get('is_learning', False) and not shutdown:
+        print(
+            f'   🧠 (Учусь... память: {response.get("memory_size", 0)} сообщений)'
+        )
+    return shutdown
 
 
 def main():
@@ -90,7 +127,7 @@ def main():
         main_logger.info('Протос готов к работе')
 
         if assistant.is_logged_in():
-            hello = assistant._generate_natural_greeting('ru')
+            hello = assistant.router.greeting('ru')
             print(f'🤖 {hello}')
         else:
             print('🤖 Привет! Я Протос.')
@@ -98,7 +135,17 @@ def main():
 
         while True:
             try:
-                user_input, corrupted = read_user_line()
+                pending = getattr(assistant, 'pending_login', None) or {}
+                step = pending.get('step', '')
+                need_secret = step in (
+                    'ask_password',
+                    'register_password',
+                    'register_password2',
+                    'register_owner_password',
+                    'register_owner_password2',
+                )
+
+                user_input, corrupted = read_user_line(secret=need_secret)
 
                 if not user_input:
                     print('🤖 Напиши что-нибудь.')
@@ -115,15 +162,7 @@ def main():
 
                 elif user_input.lower() == 'help':
                     debug_logger.debug('Вывод справки')
-                    print('\n📚 Доступные команды:')
-                    print('  help        - показать это сообщение')
-                    print('  info        - информация о системе')
-                    print('  stats       - статистика Протоса')
-                    print('  ls          - список файлов в текущей папке')
-                    print('  cd <путь>   - перейти в папку')
-                    print('  learn       - включить/выключить режим обучения')
-                    print('  clear       - очистить память')
-                    print('  exit        - выйти')
+                    print(assistant.commands.help_text())
 
                 elif user_input.lower() == 'learn':
                     debug_logger.debug('Переключение режима обучения')
@@ -131,31 +170,26 @@ def main():
                     print(f'🤖 {response}')
 
                 elif user_input.lower() == 'clear':
-                    assistant.memory.clear()
-                    debug_logger.debug('Память очищена по команде')
-                    print('🧹 Память очищена')
+                    response = assistant.process_input('/clear_memory')
+                    if show_bot_response(response):
+                        break
 
                 elif user_input.lower() in ['info', 'stats']:
                     debug_logger.debug(f'Команда: {user_input}')
                     response = assistant.process_input(user_input)
-                    print(f'🤖 {response["response"]}')
+                    if show_bot_response(response):
+                        break
 
                 elif user_input.startswith('ls') or user_input.startswith('cd'):
                     debug_logger.debug(f'Системная команда: {user_input}')
                     response = assistant.process_input(user_input)
-                    print(f'🤖 {response["response"]}')
+                    if show_bot_response(response):
+                        break
 
                 else:
                     debug_logger.debug(f'Обработка ввода: {user_input[:50]}...')
                     response = assistant.process_input(user_input)
-                    print(f'🤖 {response["response"]}')
-
-                    if response.get('is_learning', False):
-                        print(
-                            f'   🧠 (Учусь... память: {response["memory_size"]} сообщений)'
-                        )
-
-                    if response.get('shutdown'):
+                    if show_bot_response(response):
                         debug_logger.debug('Выход по прощанию')
                         main_logger.info('Завершение работы по прощанию')
                         break

@@ -1,7 +1,13 @@
 {
   "statuses": {
     "Артём": "creator",
-    "Тестер": "user"
+    "Тестер": "user",
+    "Люцифер": "user",
+    "Лавей": "user",
+    "Локи": "user",
+    "Бильбо Бэгинс": "user",
+    "Ра": "user",
+    "Сэт": "user"
   },
   "creator_name": "Артём",
   "creator_aliases": [
@@ -25,7 +31,8 @@
         "Амшегар",
         "Малефикус"
       ],
-      "relations": {}
+      "relations": {},
+      "logged_in": true
     },
     "Тестер": {
       "id": "ef2e8f39",
@@ -34,7 +41,68 @@
       "salt": "eb87349dea8cfab5d48468d14b29f23c",
       "password_hash": "4cfbba2ed3afa76ca4f3499af0fd4008431959ac74bbca7bef3f353b27e38a74",
       "aliases": [],
-      "preferred_name": null
+      "preferred_name": null,
+      "logged_in": false
+    },
+    "Люцифер": {
+      "id": "b6c2a175",
+      "status": "user",
+      "relations": {},
+      "salt": "e754f86d7401b36ce1377df7f6a03b23",
+      "password_hash": "8dd31c109371a5fa1bef15c6e13f088efe8503e569f134ae36e8cdeede9294b4",
+      "aliases": [],
+      "preferred_name": null,
+      "logged_in": false
+    },
+    "Лавей": {
+      "id": "eb58be20",
+      "status": "user",
+      "relations": {},
+      "salt": "9138e2450033d483d96837b11248f4cc",
+      "password_hash": "2d3de5f0f6bf60592e4d6da3708720135a11ee52ff9f3237f8ba832f30abb843",
+      "aliases": [],
+      "preferred_name": null,
+      "logged_in": false
+    },
+    "Локи": {
+      "id": "e07d5823",
+      "status": "user",
+      "relations": {},
+      "salt": "6cc2e9e59b616b9e50bdc17e2229aa74",
+      "password_hash": "6d73133e1db404d018757ae0ec942d5c1967282f1a8ef38720b4cce200ce6a7f",
+      "aliases": [],
+      "preferred_name": null,
+      "logged_in": false
+    },
+    "Бильбо Бэгинс": {
+      "id": "f641736a",
+      "status": "user",
+      "relations": {},
+      "salt": "46cc4ab00bf2a4b4e9016ecf3a3c7cf8",
+      "password_hash": "25a3c2aa576f05a5a2fa1f16ecde51362747a5b1106c394986c1db6143a611e2",
+      "aliases": [],
+      "preferred_name": null,
+      "logged_in": false
+    },
+    "Ра": {
+      "id": "3da9b1a1",
+      "status": "user",
+      "relations": {},
+      "salt": "37f7c8458f7735512c838e10979eb69b",
+      "password_hash": "325570609aad87f018be1101d2ab853c9e0471fe42168d2de611083c07b84ceb",
+      "aliases": [],
+      "preferred_name": null,
+      "logged_in": false
+    },
+    "Сэт": {
+      "id": "1d01e594",
+      "status": "user",
+      "relations": {},
+      "salt": "c3caa636e764a77b7b4615341182b5e8",
+      "password_hash": "02d4fe8821ec2100469917878f343bfd81914fd645347bec1ab5a7d54d6a42b3",
+      "aliases": [],
+      "preferred_name": null,
+      "logged_in": false
     }
   }
 }
