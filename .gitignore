@@ -70,3 +70,15 @@ htmlcov/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# данные окружения
+data/user_statuses.json
+data/learning_data.json
+data/learning_data.json.bak
+data/knowledge_base.json
+data/qa_pairs.json
+data/relationships.json
+data/training_dialogues.json
+data/creator_secret.json
+data/facts.json
+data/fallback_responses.json
