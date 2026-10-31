@@ -45,7 +45,6 @@ class CommandHandler:
         """
         Разбор и выполнение команды вида /name [args].
         """
-
         raw = (command or '').strip()
         if not raw.startswith('/'):
             raw = '/' + raw
@@ -62,34 +61,40 @@ class CommandHandler:
         )
 
         handlers: dict[str, CommandCallback] = {
+            # справка
             'help': self._cmd_help,
             'commands': self._cmd_help,
             'команды': self._cmd_help,
-            'clear_memory': self._cmd_clear_memory,
-            'reset': self._cmd_reset,
-            'debug': self._cmd_debug,
-            'train': self._cmd_train,
-            'learn_from_file': self._cmd_learn_from_file,
-            'learn_text': self._cmd_learn_text,
-            'save_model': self._cmd_save_model,
-            'load_model': self._cmd_load_model,
-            'set_status': self._cmd_set_status,
-            'users': self._cmd_users,
-            'register_owner': self._cmd_register_owner,
-            'delete_user': self._cmd_delete_user,
-            'relations': self._cmd_relations,
-            'knowledge': self._cmd_knowledge,
-            'learning_status': self._cmd_learning_status,
-            'train_on_books': self._cmd_train_on_books,
-            'continue_training': self._cmd_continue_training,
-            'check_books': self._cmd_check_books,
-            'download_books': self._cmd_download_books,
-            'auth': self._cmd_auth,
-            'set_secret': self._cmd_set_secret,
-            'gen_only': self._cmd_gen_only,
+            # сессия
             'logout': self._cmd_logout,
             'exit': self._cmd_exit,
             'quit': self._cmd_exit,
+            'auth': self._cmd_auth,
+            # пользователи (в основном creator)
+            'users': self._cmd_users,
+            'user_info': self._cmd_user_info,
+            'register_owner': self._cmd_register_owner,
+            'delete_user': self._cmd_delete_user,
+            'set_status': self._cmd_set_status,
+            'relations': self._cmd_relations,
+            # обучение / модель (owner + creator)
+            'train': self._cmd_train,
+            'train_on_books': self._cmd_train_on_books,
+            'continue_training': self._cmd_continue_training,
+            'save_model': self._cmd_save_model,
+            'load_model': self._cmd_load_model,
+            'learn_from_file': self._cmd_learn_from_file,
+            'learn_text': self._cmd_learn_text,
+            'learning_status': self._cmd_learning_status,
+            'check_books': self._cmd_check_books,
+            'download_books': self._cmd_download_books,
+            # знания / отладка
+            'knowledge': self._cmd_knowledge,
+            'clear_memory': self._cmd_clear_memory,
+            'reset': self._cmd_reset,
+            'debug': self._cmd_debug,
+            'gen_only': self._cmd_gen_only,
+            'set_secret': self._cmd_set_secret,
         }
 
         handler = handlers.get(command_name)
@@ -126,73 +131,74 @@ class CommandHandler:
         """
         Текст справки в зависимости от роли текущей сессии.
         """
-
         role = self.assistant.user_role
 
         if role == 'creator':
             return (
-                'Creator commands / Команды создателя:\n'
-                '/train — train on accumulated data\n'
-                '/train_on_books — train on data/books\n'
-                '/continue_training — continue book training\n'
-                '/save_model — save model\n'
-                '/load_model — load model\n'
-                '/learn_from_file <path> — load file for training\n'
-                '/learn_text <text> — add text for training\n'
-                '/learning_status — training data status\n'
-                '/check_books — list books in data/books\n'
-                '/download_books — download sample books\n'
-                '/auth <phrase> — confirm creator secret\n'
-                '/set_secret <phrase> — change secret (creator only)\n'
-                '/set_status <name> <status> — set user status\n'
-                '/debug — debug info\n'
-                '/clear_memory — clear dialogue memory\n'
-                '/reset — reset session memory + learning flag\n'
-                '/users — known users\n'
-                '/'
-                '/'
-                '/knowledge <query> — search knowledge\n'
-                '/relations — your relations\n'
-                '/gen_only — toggle LSTM-only replies\n'
-                '/logout — end of session\n'
-                '/exit, /quit - shutdown\n'
+                'Команды создателя / Creator:\n'
                 '\n'
-                'Without / : «обучись на книгах», «сохрани модель»,\n'
-                '«статус обучения», «какие команды», «задай вопрос».'
+                'Сессия:\n'
+                '  /logout — выйти из сессии\n'
+                '  /exit, /quit — выключить Протоса\n'
+                '  /auth <фраза> — подтвердить секрет\n'
+                '  /set_secret <фраза> — сменить секрет\n'
+                '\n'
+                'Пользователи:\n'
+                '  /users [all|owners|users] — список (без создателя)\n'
+                '  /user_info <имя|id> — карточка\n'
+                '  /register_owner <имя> — новый владелец\n'
+                '  /delete_user <имя|id> — удалить user/owner (с подтверждением)\n'
+                '  /set_status <имя> <статус> — сменить статус\n'
+                '  /relations — твои связи\n'
+                '\n'
+                'Обучение и модель:\n'
+                '  /train, /train_on_books, /continue_training\n'
+                '  /save_model, /load_model\n'
+                '  /learn_from_file <path>, /learn_text <текст>\n'
+                '  /learning_status, /check_books, /download_books\n'
+                '\n'
+                'Прочее:\n'
+                '  /knowledge <запрос>\n'
+                '  /clear_memory, /reset, /debug, /gen_only\n'
+                '  /help\n'
+                '\n'
+                'Без /: «обучись на книгах», «сохрани модель»,\n'
+                '«статус обучения», «какие команды».'
             )
 
         if role == 'owner':
             return (
-                'Owner commands / Команды владельца:\n'
-                '/train — train on accumulated data\n'
-                '/train_on_books — train on data/books\n'
-                '/continue_training — continue book training\n'
-                '/save_model — save model\n'
-                '/load_model — load model\n'
-                '/learn_from_file <path> — load file for training\n'
-                '/learn_text <text> — add text for training\n'
-                '/learning_status — training data status\n'
-                '/check_books — list books\n'
-                '/download_books — download sample books\n'
-                '/set_status <name> <status> — set user status\n'
-                '/knowledge <query> — search knowledge\n'
-                '/relations — your relations\n'
-                '/help — this help\n'
-                '• /logout — end of session\n'
-                '•/exit, /quit - shutdown\n'
+                'Команды владельца / Owner:\n'
                 '\n'
-                'Personality / secret: creator only.\n'
-                'Личность и секрет — только создатель.'
+                'Сессия:\n'
+                '  /logout, /exit, /quit\n'
+                '\n'
+                'Пользователи:\n'
+                '  /user_info <имя|id> — карточка\n'
+                '  /set_status <имя> <статус>\n'
+                '  /relations\n'
+                '\n'
+                'Обучение и модель:\n'
+                '  /train, /train_on_books, /continue_training\n'
+                '  /save_model, /load_model\n'
+                '  /learn_from_file, /learn_text, /learning_status\n'
+                '  /check_books, /download_books\n'
+                '\n'
+                'Прочее:\n'
+                '  /knowledge <запрос>, /help\n'
+                '\n'
+                'Личность и секрет — только создатель.\n'
+                'Регистрация/удаление owner — только создатель.'
             )
 
         return (
-            'Available / Доступно:\n'
-            '• talk / поговорить\n'
-            '• /knowledge <query> — search knowledge\n'
-            '• /relations — your relations\n'
-            '• /help — this help\n'
-            '• /logout — end of session\n'
-            '•/ exit, / quit - shutdown\n'
+            'Доступно / Available:\n'
+            '  диалог / talk\n'
+            '  /knowledge <запрос>\n'
+            '  /relations\n'
+            '  /help\n'
+            '  /logout — конец сессии\n'
+            '  /exit, /quit — выключить Протоса\n'
         )
 
 
@@ -274,6 +280,36 @@ class CommandHandler:
             f'  Relations: {assistant.relationships}\n'
             f'  Learning examples: {learning_data_count}'
         )
+
+
+    def _find_user_record(self, raw: str) -> tuple[str | None, dict | None]:
+        """
+        Поиск по имени или id=... / голому id.
+        """
+
+        assistant = self.assistant
+        q = (raw or '').strip()
+        if not q:
+            return None, None
+
+        id_query = None
+        if q.lower().startswith('id='):
+            id_query = q.split('=', 1)[1].strip()
+        elif len(q) <= 12 and all(c in '0123456789abcdefABCDEF' for c in q):
+            id_query = q
+
+        if id_query:
+            for name, rec in assistant.known_users.items():
+                if not isinstance(rec, dict):
+                    continue
+                if (rec.get('id') or '').lower() == id_query.lower():
+                    return name, rec
+            return None, None
+
+        for name, rec in assistant.known_users.items():
+            if name.lower() == q.lower():
+                return name, rec if isinstance(rec, dict) else {}
+        return None, None
 
 
     # ------------------------------------------------------------------
@@ -490,6 +526,8 @@ class CommandHandler:
                     lines.append(f'  - {name}')
                 continue
             status = record.get('status') or assistant.user_statuses.get(name, 'user')
+            if status == 'creator' or assistant.is_creator_name(name):
+                continue
             if filter_mode == 'owners' and status != 'owner':
                 continue
             if filter_mode == 'users' and status != 'user':
@@ -551,44 +589,151 @@ class CommandHandler:
 
     def _cmd_delete_user(self, arguments: list[str]) -> str:
         """
-        /delete_user <имя> — удалить user или owner (не creator).
+        /delete_user <имя|id> — запрос подтверждения (только creator).
         """
 
         denied = self._require_creator()
         if denied:
             return denied
-        if not arguments:
-            return 'Использование: /delete_user <имя>'
 
         assistant = self.assistant
-        raw = ' '.join(arguments).strip()
-        key = None
-        for name in assistant.known_users:
-            if name.lower() == raw.lower():
-                key = name
-                break
-        if key is None:
-            return f'Пользователь «{raw}» не найден.'
+        if getattr(assistant, 'pending_delete', None):
+            pending = assistant.pending_delete
+            return (
+                f'Идёт этап подтверждения удаления «{pending.get("key")}». '
+                f'Ожидание решения...'
+            )
 
-        rec = assistant.known_users.get(key) or {}
+        if not arguments:
+            return (
+                'Использование:\n'
+                '  /delete_user <имя>\n'
+                '  /delete_user id=<id>\n'
+                '  /delete_user <имя> id=<id>'
+            )
+
+        assistant = self.assistant
+        key, rec = self._resolve_delete_target(arguments)
+        if key is None:
+            return 'Учётная запись не найдена.'
+
+        rec = rec or {}
         status = rec.get('status') or assistant.user_statuses.get(key, 'user')
         if status == 'creator' or assistant.is_creator_name(key):
             return 'Создателя удалить нельзя.'
 
-        if rec.get('logged_in'):
-            assistant.auth.session.set_logged_in(None)
-            if assistant.current_speaker == key:
-                assistant.session_authenticated = False
-                assistant.current_speaker = None
-                assistant.user_name = None
-                assistant.user_role = 'user'
+        assistant.pending_delete = {
+            'key': key,
+            'status': status,
+            'id': rec.get('id'),
+        }
+        return (
+                f'Удалить «{key}» ({status}'
+                + (f', id={rec.get("id")}' if rec.get('id') else '')
+                + ')?\n'
+                  f'Ответьте «да», «нет» или «отмена».'
+        )
 
-        del assistant.known_users[key]
-        assistant.user_statuses.pop(key, None)
-        if getattr(assistant, 'owner_name', None) == key:
-            assistant.owner_name = None
-        assistant.save_user_statuses()
-        return f'Удалена учётная запись «{key}» ({status}).'
+
+    @staticmethod
+    def _parse_yes_no(text: str) -> str | None:
+        """
+        'yes' | 'no' | None (не распознано).
+        """
+
+        t = (text or '').lower().strip()
+        t = re.sub(r'[.!?…]+$', '', t).strip()
+        if t in ('д', 'да', 'y', 'yes', 'ага', 'угу', 'ok', 'ок', 'удали', 'подтверждаю'):
+            return 'yes'
+        if t in ('н', 'нет', 'n', 'no', 'отмена', 'cancel', 'отменить'):
+            return 'no'
+        if re.search(r'(^|[^\wа-яё])да([^\wа-яё]|$)', t):
+            return 'yes'
+        if re.search(r'(^|[^\wа-яё])(нет|отмена)([^\wа-яё]|$)', t):
+            return 'no'
+        return None
+
+
+    def confirm_delete(self, user_input: str, lang: str = 'ru') -> str:
+        """
+        Ответ на запрос удаления: да / нет / отмена (д/н, y/n).
+        """
+
+        assistant = self.assistant
+        info = assistant.pending_delete or {}
+        key = info.get('key')
+        status = info.get('status', 'user')
+
+        answer = self._parse_yes_no(user_input)
+
+        if answer == 'yes':
+            if not key or key not in assistant.known_users:
+                assistant.pending_delete = None
+                return 'Запись уже отсутствует. Удаление отменено.'
+
+            rec = assistant.known_users.get(key) or {}
+            if rec.get('logged_in'):
+                assistant.auth.set_logged_in(None)
+                if assistant.current_speaker == key:
+                    assistant.session_authenticated = False
+                    assistant.current_speaker = None
+                    assistant.user_name = None
+                    assistant.user_role = 'user'
+
+            del assistant.known_users[key]
+            assistant.user_statuses.pop(key, None)
+            if getattr(assistant, 'owner_name', None) == key:
+                assistant.owner_name = None
+            assistant.save_user_statuses()
+            assistant.pending_delete = None
+            return f'Удалена учётная запись «{key}» ({status}).'
+
+        if answer == 'no':
+            assistant.pending_delete = None
+            return 'Удаление отменено.'
+
+        return (
+            f'Нужно подтверждение удаления «{key}». '
+            f'Ответьте: да/нет (д/н, y/n) или «отмена».'
+        )
+
+
+    def _resolve_delete_target(
+            self, arguments: list[str],
+    ) -> tuple[str | None, dict | None]:
+        """
+        Разбор аргументов /delete_user → (имя_ключа, record).
+        """
+
+        id_tokens = [t for t in arguments if t.lower().startswith('id=')]
+        name_tokens = [t for t in arguments if not t.lower().startswith('id=')]
+
+        id_arg = id_tokens[0].split('=', 1)[1].strip() if id_tokens else None
+        name_arg = ' '.join(name_tokens).strip() if name_tokens else None
+
+        if len(arguments) == 1 and not id_arg:
+            return self._find_user_record(arguments[0])
+
+        key_name, rec_name = (
+            self._find_user_record(name_arg) if name_arg else (None, None)
+        )
+        key_id, rec_id = (
+            self._find_user_record(f'id={id_arg}') if id_arg else (None, None)
+        )
+
+        if name_arg and id_arg:
+            if key_name is None and key_id is None:
+                return None, None
+            if key_name and key_id and key_name != key_id:
+                return None, None
+            if key_name and key_id and key_name != key_id:
+                pass
+            key = key_name or key_id
+            return key, (rec_name or rec_id)
+
+        if name_arg:
+            return key_name, rec_name
+        return key_id, rec_id
 
 
     def _cmd_relations(self, _arguments: list[str]) -> str:
@@ -809,3 +954,49 @@ class CommandHandler:
         if name:
             return f'__SHUTDOWN__До встречи, {name}!'
         return '__SHUTDOWN__До встречи!'
+
+
+    def _cmd_user_info(self, arguments: list[str]) -> str:
+        """
+        /user_info <имя|id> — карточка учётки (creator или owner).
+        """
+        denied = self._require_owner_or_creator()
+        if denied:
+            return denied
+        if not arguments:
+            return 'Использование: /user_info <имя|id>'
+
+        assistant = self.assistant
+        raw = ' '.join(arguments).strip()
+        key, rec = self._find_user_record(raw)
+        if key is None or rec is None:
+            return f'Учётная запись «{raw}» не найдена.'
+
+        status = rec.get('status') or assistant.user_statuses.get(key, 'user')
+        if status == 'creator' or assistant.is_creator_name(key):
+            if assistant.user_role != 'creator':
+                return 'Нет доступа к карточке создателя.'
+            pass
+
+        uid = rec.get('id') or '—'
+        session_state = 'in' if rec.get('logged_in') else 'out'
+        aliases = rec.get('aliases') or []
+        preferred = rec.get('preferred_name') or '—'
+        has_password = bool(rec.get('password_hash'))
+        relations = assistant.relationships.get(key) or {}
+
+        lines = [
+            f'Учётка: {key}',
+            f'  id: {uid}',
+            f'  status: {status}',
+            f'  session: {session_state}',
+            f'  preferred_name: {preferred}',
+            f'  aliases: {", ".join(aliases) if aliases else "—"}',
+            f'  password set: {"yes" if has_password else "no"}',
+        ]
+        if relations:
+            rel_s = ', '.join(f'{r}: {p}' for r, p in relations.items())
+            lines.append(f'  relations: {rel_s}')
+        else:
+            lines.append('  relations: —')
+        return '\n'.join(lines)
