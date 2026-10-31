@@ -120,6 +120,7 @@ class Assistant:
         # Сессия (AuthService создаём после загрузки known_users)
         self.session_authenticated = False
         self.pending_login: dict | None = None
+        self.pending_delete: dict | None = None
         self.auth: AuthService | None = None
 
         # Система ролей
@@ -1054,6 +1055,45 @@ class Assistant:
 
         try:
             # 1. Команды с /
+            if user_input.startswith('/'):
+                debug_logger.debug(f'Обнаружена команда: {user_input}')
+                cmd_body = user_input[1:].lstrip()
+                if cmd_body and not (
+                        cmd_body[0].isascii() and (cmd_body[0].isalpha() or cmd_body[0] == '_')
+                ):
+                    response = (
+                        'Команда похоже повреждена при вводе. '
+                        'Повторите, начиная с / и латинского имени (например /help).'
+                    )
+                else:
+                    response = self.commands.handle(user_input)
+                    if response is None:
+                        response = (
+                            'Неизвестная команда. Напишите /help — список доступных.'
+                        )
+                dialog_logger.info(f'🤖 {response}')
+                return {
+                    'response': response,
+                    'language': lang,
+                    'memory_size': len(self.memory),
+                    'is_learning': self.is_learning,
+                    'user_role': self.user_role,
+                    'current_user': self.current_speaker,
+                    'shutdown': str(response).startswith('__SHUTDOWN__'),
+                }
+
+            if getattr(self, 'pending_delete', None):
+                response = self.commands.confirm_delete(user_input, lang)
+                dialog_logger.info(f'🤖 {response}')
+                return {
+                    'response': response,
+                    'language': lang,
+                    'memory_size': len(self.memory),
+                    'is_learning': self.is_learning,
+                    'user_role': self.user_role,
+                    'current_user': self.current_speaker,
+                }
+
             if user_input.startswith('/'):
                 debug_logger.debug(f'Обнаружена команда: {user_input}')
                 response = self.commands.handle(user_input)
