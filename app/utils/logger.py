@@ -87,44 +87,59 @@ def log_filter(record):
 
 
 def add_logger_handler(
-    filename: str,
-    level: str = 'DEBUG',
-    rotation: str = '10 MB',
-    retention: str = '30 days',
-    compression: str = 'zip',
-    filter_key: str = None,
-    console: bool = SHOW_LOGS_IN_CONSOLE
-):
+        filename: str,
+        level: str = 'DEBUG',
+        rotation: str = '10 MB',
+        retention: str = '30 days',
+        compression: str = 'zip',
+        filter_key: str | None = None,
+        console: bool = SHOW_LOGS_IN_CONSOLE,
+) -> None:
     """
-    Добавление обработчика для логов.
+    Обработчик логов: файл и/или консоль по LOG_OUTPUT.
+    Записи с extra['dialog']=True сюда не должны попадать
+    (для dialog — отдельные handlers ниже).
     """
 
-    if filter_key:
-        file_filter = lambda record: record['extra'].get(filter_key, False) and log_filter(record)
-    else:
-        file_filter = log_filter
 
-    if LOG_OUTPUT in ['file', 'both']:
+    def file_filter(record):
+        if record['extra'].get('dialog', False):
+            return False
+        if filter_key:
+            if not record['extra'].get(filter_key, False):
+                return False
+        return log_filter(record)
+
+
+    if LOG_OUTPUT in ('file', 'both'):
         logger.add(
             os.path.join(LOG_DIR, filename),
             rotation=rotation,
             retention=retention,
             compression=compression,
             level=level,
-            format='{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}',
+            format=(
+                '{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | '
+                '{name}:{function}:{line} - {message}'
+            ),
             filter=file_filter,
-            enqueue=True
+            enqueue=True,
         )
 
-    if LOG_OUTPUT in ['console', 'both'] and console:
+    if LOG_OUTPUT in ('console', 'both') and console:
         logger.add(
             sys.stdout,
-            format='<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>',
+            format=(
+                '<green>{time:HH:mm:ss}</green> | '
+                '<level>{level: <8}</level> | '
+                '<cyan>{name}</cyan>:<cyan>{function}</cyan> - '
+                '<level>{message}</level>'
+            ),
             level=level,
             colorize=True,
             backtrace=True,
             diagnose=True,
-            filter=file_filter
+            filter=file_filter,
         )
 
 
@@ -184,22 +199,49 @@ add_logger_handler(
     retention='60 days'
 )
 
-if DIALOG_OUTPUT in ['console', 'both']:
+if DIALOG_OUTPUT in ('file', 'both'):
+    logger.add(
+        os.path.join(LOG_DIR, 'protos_dialog.log'),
+        rotation='10 MB',
+        retention='30 days',
+        compression='zip',
+        level='INFO',
+        format='{time:YYYY-MM-DD HH:mm:ss} | {message}',
+        filter=lambda record: record['extra'].get('dialog', False),
+        enqueue=True,
+    )
+
+if DIALOG_OUTPUT in ('console', 'both'):
     logger.add(
         sys.stdout,
         format='<level>{message}</level>',
         level='INFO',
         colorize=True,
-        filter=lambda record: record['extra'].get('dialog', False)
+        filter=lambda record: record['extra'].get('dialog', False),
     )
 
-logger.add(
-    sys.stdout,
-    format='<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> - <level>{message}</level>',
-    level='INFO',
-    colorize=True,
-    filter=lambda record: record['level'].name == 'INFO'
-)
+
+if LOG_OUTPUT in ('console', 'both') and SHOW_LOGS_IN_CONSOLE:
+    logger.add(
+        sys.stdout,
+        format=(
+            '<green>{time:HH:mm:ss}</green> | '
+            '<level>{level: <8}</level> - <level>{message}</level>'
+        ),
+        level='INFO',
+        colorize=True,
+        filter=lambda record: (
+            record['level'].name == 'INFO'
+            and not record['extra'].get('dialog', False)
+            and not any(
+                record['extra'].get(k, False)
+                for k in (
+                    'main', 'assistant', 'training', 'neural',
+                    'memory', 'fs', 'error', 'debug',
+                )
+            )
+        ),
+    )
 
 active_levels_names = [LEVEL_MAP.get(l, 'UNKNOWN') for l in sorted(ACTIVE_LEVELS)]
 if not active_levels_names:
@@ -211,7 +253,6 @@ logger.info(f'  Вывод: {LOG_OUTPUT}')
 logger.info(f'  Диалоги: {DIALOG_OUTPUT}')
 logger.info(f'  Логи в консоли: {SHOW_LOGS_IN_CONSOLE}')
 logger.info(f'  Папка логов: {LOG_DIR}')
-
 
 main_logger = logger.bind(main=True)
 assistant_logger = logger.bind(assistant=True)
